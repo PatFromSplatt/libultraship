@@ -2,6 +2,7 @@
 #include <SDL2/SDL.h>
 #include "ship/Context.h"
 #include "ship/controller/controldeck/ControlDeck.h"
+#include "ship/touch/TouchControlOverlay.h"
 
 namespace Ship {
 
@@ -22,6 +23,7 @@ void SDLAddRemoveDeviceEventHandler::UpdateElement() {
         // the SDL_CONTROLLERDEVICEADDED event
         Context::GetInstance()->GetControlDeck()->GetConnectedPhysicalDeviceManager()->HandlePhysicalDeviceConnect(
             event.cdevice.which);
+        TouchControlOverlay::Instance().SetPhysicalControllerConnected(true);
     }
 
     while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_CONTROLLERDEVICEREMOVED, SDL_CONTROLLERDEVICEREMOVED) > 0) {
@@ -29,6 +31,7 @@ void SDLAddRemoveDeviceEventHandler::UpdateElement() {
         // SDL_CONTROLLERDEVICEREMOVED [...] event
         Context::GetInstance()->GetControlDeck()->GetConnectedPhysicalDeviceManager()->HandlePhysicalDeviceDisconnect(
             event.cdevice.which);
+        TouchControlOverlay::Instance().SetPhysicalControllerConnected(false);
     }
 }
 } // namespace Ship
