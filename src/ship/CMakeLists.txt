@@ -70,6 +70,13 @@ endif()
 source_group("utils" FILES ${Source_Files__Utils})
 target_sources(libultraship PRIVATE ${Source_Files__Utils})
 
+#=================== Touch ===================
+
+file(GLOB Source_Files__Touch RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "touch/*.cpp")
+
+source_group("touch" FILES ${Source_Files__Touch})
+target_sources(libultraship PRIVATE ${Source_Files__Touch})
+
 #=================== Port ===================
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")

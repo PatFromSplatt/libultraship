@@ -9,6 +9,7 @@
 
 #include "ship/config/Config.h"
 #include "ship/Context.h"
+#include "ship/touch/TouchControlOverlay.h"
 #include "ship/config/ConsoleVariable.h"
 #include "fast/resource/type/Texture.h"
 #include "ship/resource/File.h"
@@ -707,6 +708,7 @@ void Gui::DrawGame() {
     ImGui::PopStyleColor();
 
     GetGameOverlay()->Draw();
+    TouchControlOverlay::Instance().Draw();
 
     ImVec2 mainPos = ImGui::GetWindowPos();
     ImVec2 size = ImGui::GetContentRegionAvail();

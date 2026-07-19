@@ -10,6 +10,7 @@
 
 #include "ship/Context.h"
 #include "ship/config/ConsoleVariable.h"
+#include "ship/touch/TouchControlOverlay.h"
 #include "ship/controller/controldeck/ControlDeck.h"
 #include "ship/window/FileDropMgr.h"
 #include "fast/backends/gfx_sdl.h"
@@ -577,6 +578,11 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
             break;
         case SDL_MOUSEBUTTONDOWN:
             OnMouseButtonDown(event.button.button - 1);
+            break;
+        case SDL_FINGERDOWN:
+        case SDL_FINGERUP:
+        case SDL_FINGERMOTION:
+            Ship::TouchControlOverlay::Instance().HandleFingerEvent(event.tfinger, event.type);
             break;
         case SDL_MOUSEBUTTONUP:
             OnMouseButtonUp(event.button.button - 1);
