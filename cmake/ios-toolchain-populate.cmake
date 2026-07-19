@@ -1,4 +1,8 @@
-set(PLATFORM "OS64COMBINED")
+# Default to a combined device+simulator build (requires the Xcode generator),
+# but allow -DPLATFORM=OS64 for device-only builds with Ninja.
+if(NOT DEFINED PLATFORM)
+    set(PLATFORM "OS64COMBINED")
+endif()
 include(FetchContent)
 FetchContent_Declare(iostoolchain
     GIT_REPOSITORY https://github.com/leetal/ios-cmake
