@@ -6,6 +6,7 @@
 #include "ship/utils/StringHelper.h"
 #include <imgui.h>
 #include "ship/controller/controldevice/controller/mapping/mouse/WheelHandler.h"
+#include "ship/touch/TouchControllerState.h"
 
 namespace LUS {
 ControlDeck::ControlDeck(std::vector<CONTROLLERBUTTONS_T> additionalBitmasks,
@@ -69,6 +70,21 @@ void ControlDeck::WriteToOSContPad(OSContPad* pad) {
         if (controller != nullptr) {
             controller->ReadToPad(&pad[i]);
         }
+    }
+
+    // Merge on-screen touch controls into port 1 (touch and a physical controller can
+    // both be active; OR semantics match how multiple mappings already combine).
+    auto& touch = Ship::TouchControllerState::Instance();
+    pad[0].button |= touch.buttons.load();
+    if (pad[0].stick_x == 0 && pad[0].stick_y == 0) {
+        pad[0].stick_x = touch.stickX.load();
+        pad[0].stick_y = touch.stickY.load();
+    }
+    const float camX = touch.cameraX.load();
+    const float camY = touch.cameraY.load();
+    if (camX != 0.0f || camY != 0.0f) {
+        pad[0].right_stick_x = (int8_t)(camX * 127.0f);
+        pad[0].right_stick_y = (int8_t)(camY * 127.0f);
     }
 }
 } // namespace LUS
