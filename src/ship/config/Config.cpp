@@ -261,7 +261,7 @@ AudioBackend Config::GetCurrentAudioBackend() {
     return AudioBackend::WASAPI;
 #endif
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(__IOS__)
     return AudioBackend::COREAUDIO;
 #endif
 
