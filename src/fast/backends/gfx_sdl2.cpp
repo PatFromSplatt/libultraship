@@ -11,6 +11,9 @@
 #include "ship/Context.h"
 #include "ship/config/ConsoleVariable.h"
 #include "ship/touch/TouchControlOverlay.h"
+#if defined(__IOS__) || defined(__ANDROID__)
+#include "ship/port/mobile/MobileImpl.h"
+#endif
 #include "ship/controller/controldeck/ControlDeck.h"
 #include "ship/window/FileDropMgr.h"
 #include "fast/backends/gfx_sdl.h"
@@ -323,6 +326,29 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
     SDL_Init(SDL_INIT_VIDEO);
 
     SDL_EventState(SDL_DROPFILE, SDL_ENABLE);
+
+#if defined(__IOS__) || defined(__ANDROID__)
+    // SDL_APP_* lifecycle events arrive synchronously from the OS callback on mobile —
+    // an event watch is the only reliable way to see them in time. Rendering while
+    // backgrounded starves the CAMetalLayer drawable pool (~1fps after resume).
+    SDL_AddEventWatch(
+        [](void* userdata, SDL_Event* event) -> int {
+            switch (event->type) {
+                case SDL_APP_WILLENTERBACKGROUND:
+                case SDL_APP_DIDENTERBACKGROUND:
+                    Ship::Mobile::SetAppBackgrounded(true);
+                    break;
+                case SDL_APP_WILLENTERFOREGROUND:
+                case SDL_APP_DIDENTERFOREGROUND:
+                    Ship::Mobile::SetAppBackgrounded(false);
+                    break;
+                default:
+                    break;
+            }
+            return 0;
+        },
+        nullptr);
+#endif
 
 #if defined(__APPLE__)
     bool use_opengl = strcmp(gfxApiName, "OpenGL") == 0;

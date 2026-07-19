@@ -31,6 +31,11 @@
 #include <imgui_impl_metal.h>
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/fmt.h>
+#ifdef __IOS__
+#include <SDL_timer.h>
+#include <SDL_events.h>
+#include "ship/port/mobile/MobileImpl.h"
+#endif
 
 #include "fast/backends/gfx_metal_shader.h"
 
@@ -608,6 +613,16 @@ int GfxRenderingAPIMetal::CreateFramebuffer() {
 }
 
 void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t height) {
+#ifdef __IOS__
+    // Never acquire drawables while backgrounded: iOS drops background presents, the
+    // CAMetalLayer's 3-drawable pool starves, and every later nextDrawable() blocks for
+    // its full 1s timeout — the game visually runs at ~1fps after resume. Park here
+    // (pumping events so the foreground notification can flip the flag) instead.
+    while (Ship::Mobile::IsAppBackgrounded()) {
+        SDL_PumpEvents();
+        SDL_Delay(50);
+    }
+#endif
     mCurrentDrawable = nullptr;
     mCurrentDrawable = mLayer->nextDrawable();
 
