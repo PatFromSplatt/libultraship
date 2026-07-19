@@ -1040,6 +1040,12 @@ void Gui::LoadGuiTexture(const std::string& name, const std::string& path, const
     const auto res =
         static_cast<Fast::Texture*>(Context::GetInstance()->GetResourceManager()->LoadResource(path, true).get());
 
+    if (res == nullptr) {
+        // A missing texture must not take the whole boot down — log which one and move on.
+        SPDLOG_ERROR("LoadGuiTexture: could not load resource \"{}\" (name \"{}\")", path, name);
+        return;
+    }
+
     LoadGuiTexture(name, *res, tint);
 }
 
