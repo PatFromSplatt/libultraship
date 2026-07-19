@@ -408,7 +408,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
         mRenderer = SDL_CreateRenderer(mWnd, -1, flags);
         if (mRenderer == nullptr) {
             SPDLOG_ERROR("Error creating renderer: {}", SDL_GetError());
-            return;
+            // Continuing without a renderer leaves the Gui/ImGui uninitialized and the app
+            // crashes later in unrelated code; fail fast at the true point of failure instead.
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Fatal: could not create renderer", SDL_GetError(), mWnd);
+            abort();
         }
 
         if (startFullScreen) {
