@@ -22,6 +22,11 @@ static constexpr int32_t kEnabledDefault = 1;
 static constexpr int32_t kEnabledDefault = 0;
 #endif
 
+#ifdef __IOS__
+extern "C" void GetIOSSafeAreaInsets(float* top, float* left, float* bottom, float* right);
+extern "C" void IOSGyroSetEnabled(bool enabled, float sensitivity);
+#endif
+
 TouchControlOverlay& TouchControlOverlay::Instance() {
     static TouchControlOverlay sInstance;
     return sInstance;
@@ -37,6 +42,9 @@ bool TouchControlOverlay::Enabled() {
 
 void TouchControlOverlay::RebuildLayout(ImVec2 displaySize) {
     mDisplaySize = displaySize;
+#ifdef __IOS__
+    GetIOSSafeAreaInsets(&mSafeTop, &mSafeLeft, &mSafeBottom, &mSafeRight);
+#endif
     const float W = displaySize.x;
     const float H = displaySize.y;
     const float scale = Context::GetInstance()->GetConsoleVariables()->GetFloat("gTouch.Scale", 1.0f);
@@ -340,6 +348,17 @@ void TouchControlOverlay::Draw() {
         return;
     }
     auto& state = TouchControllerState::Instance();
+
+#ifdef __IOS__
+    // keep the gyro shim in sync with its CVars (start/stop is idempotent)
+    static bool sGyroWasEnabled = false;
+    auto cvars = Context::GetInstance()->GetConsoleVariables();
+    const bool gyroEnabled = cvars->GetInteger("gTouch.GyroEnabled", 0) != 0;
+    if (gyroEnabled != sGyroWasEnabled) {
+        IOSGyroSetEnabled(gyroEnabled, cvars->GetFloat("gTouch.GyroSensitivity", 1.0f));
+        sGyroWasEnabled = gyroEnabled;
+    }
+#endif
 
     // drain camera accumulators into per-frame deltas
     state.cameraX.store(std::clamp(mCamAccumX, -1.0f, 1.0f));

@@ -13,6 +13,8 @@ struct TouchControllerState {
     std::atomic<int8_t> stickY{ 0 };
     std::atomic<float> cameraX{ 0.0f }; // right-stick equivalent, -1..1
     std::atomic<float> cameraY{ 0.0f };
+    std::atomic<float> gyroX{ 0.0f }; // device rotation rate, consumed via OSContPad gyro fields
+    std::atomic<float> gyroY{ 0.0f };
 
     static TouchControllerState& Instance() {
         static TouchControllerState sInstance;

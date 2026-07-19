@@ -63,6 +63,10 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
     list(APPEND Source_Files__Utils ${CMAKE_CURRENT_SOURCE_DIR}/utils/AppleFolderManager.mm)
 endif()
 
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    list(APPEND Source_Files__Utils ${CMAKE_CURRENT_SOURCE_DIR}/utils/IOSSafeArea.mm)
+endif()
+
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     list(APPEND Source_Files__Utils ${CMAKE_CURRENT_SOURCE_DIR}/utils/macUtils.mm)
 endif()
@@ -73,6 +77,10 @@ target_sources(libultraship PRIVATE ${Source_Files__Utils})
 #=================== Touch ===================
 
 file(GLOB Source_Files__Touch RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "touch/*.cpp")
+
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    list(APPEND Source_Files__Touch ${CMAKE_CURRENT_SOURCE_DIR}/touch/IOSGyro.mm)
+endif()
 
 source_group("touch" FILES ${Source_Files__Touch})
 target_sources(libultraship PRIVATE ${Source_Files__Touch})

@@ -116,8 +116,8 @@ void Gui::Init(GuiWindowInitData windowImpl) {
     mImGuiIo->Fonts->AddFontFromMemoryCompressedBase85TTF(fontawesome_compressed_data_base85, iconFontSize,
                                                           &iconsConfig, sIconsRanges);
 
-#if defined(__ANDROID__)
-    // Scale everything by 2 for Android
+#if defined(__ANDROID__) || defined(__IOS__)
+    // Scale everything by 2 for mobile touchability
     ImGui::GetStyle().ScaleAllSizes(2.0f);
     mImGuiIo->FontGlobalScale = 2.0f;
 #endif
