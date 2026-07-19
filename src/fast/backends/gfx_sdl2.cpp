@@ -323,6 +323,16 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
     SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
 #endif
 
+#ifdef __IOS__
+    // Quality-of-life for handheld play, set before video init:
+    // - keep the screen awake during controller play and cutscenes
+    // - defer the home-indicator gesture so bottom-edge touch controls do not exit the app
+    // - play audio even when the hardware silent switch is on (game, not ambient app)
+    SDL_SetHint(SDL_HINT_IDLE_TIMER_DISABLED, "1");
+    SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
+    SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "playback");
+#endif
+
     SDL_Init(SDL_INIT_VIDEO);
 
     SDL_EventState(SDL_DROPFILE, SDL_ENABLE);
