@@ -63,13 +63,21 @@ void TouchControlOverlay::RebuildLayout(ImVec2 displaySize) {
         mElements.push_back({ id, ImVec2(cx, cy), r * scale, ImVec2(), mask, label });
     };
 
+    const bool edge = Context::GetInstance()->GetConsoleVariables()->GetInteger("gTouch.EdgeLayout", 0) != 0;
+
     if (!mOcarinaLayout) {
-        // hug the right edge/corner: thumbs rest at the phone's rim, not its middle
-        circle(TouchElementId::A, 0.940f * W - sr, 0.76f * H, 0.085f * H, BTN_A, "A");
-        circle(TouchElementId::B, 0.848f * W - sr, 0.875f * H, 0.065f * H, BTN_B, "B");
-        const float cX = 0.918f * W - sr;
-        const float cY = 0.42f * H;
-        const float cSp = 0.080f * H * scale;
+        if (edge) {
+            // hug the right edge/corner: thumbs rest at the phone's rim
+            circle(TouchElementId::A, 0.940f * W - sr, 0.76f * H, 0.085f * H, BTN_A, "A");
+            circle(TouchElementId::B, 0.848f * W - sr, 0.875f * H, 0.065f * H, BTN_B, "B");
+        } else {
+            // classic: cluster sits slightly inward (default; preferred in device testing)
+            circle(TouchElementId::A, 0.90f * W - sr, 0.72f * H, 0.085f * H, BTN_A, "A");
+            circle(TouchElementId::B, 0.80f * W - sr, 0.80f * H, 0.065f * H, BTN_B, "B");
+        }
+        const float cX = (edge ? 0.918f : 0.865f) * W - sr;
+        const float cY = (edge ? 0.42f : 0.47f) * H;
+        const float cSp = (edge ? 0.080f : 0.085f) * H * scale;
         circle(TouchElementId::CUp, cX, cY - cSp, 0.042f * H, BTN_CUP, "C");
         circle(TouchElementId::CDown, cX, cY + cSp, 0.042f * H, BTN_CDOWN, "C");
         circle(TouchElementId::CLeft, cX - cSp, cY, 0.042f * H, BTN_CLEFT, "C");
@@ -88,9 +96,15 @@ void TouchControlOverlay::RebuildLayout(ImVec2 displaySize) {
         pill(TouchElementId::NoteCUp, x += step, keyY, hw, hh, BTN_CUP, "^");
     }
 
-    pill(TouchElementId::Z, 0.070f * W + sl, 0.085f * H + st, 0.052f * W, 0.042f * H, BTN_Z, "Z");
-    pill(TouchElementId::L, 0.158f * W + sl, 0.085f * H + st, 0.026f * W, 0.032f * H, BTN_L, "L");
-    pill(TouchElementId::R, 0.930f * W - sr, 0.085f * H + st, 0.052f * W, 0.042f * H, BTN_R, "R");
+    if (edge) {
+        pill(TouchElementId::Z, 0.070f * W + sl, 0.085f * H + st, 0.052f * W, 0.042f * H, BTN_Z, "Z");
+        pill(TouchElementId::L, 0.158f * W + sl, 0.085f * H + st, 0.026f * W, 0.032f * H, BTN_L, "L");
+        pill(TouchElementId::R, 0.930f * W - sr, 0.085f * H + st, 0.052f * W, 0.042f * H, BTN_R, "R");
+    } else {
+        pill(TouchElementId::Z, 0.09f * W + sl, 0.12f * H + st, 0.055f * W, 0.045f * H, BTN_Z, "Z");
+        pill(TouchElementId::L, 0.185f * W + sl, 0.12f * H + st, 0.030f * W, 0.035f * H, BTN_L, "L");
+        pill(TouchElementId::R, 0.91f * W - sr, 0.12f * H + st, 0.055f * W, 0.045f * H, BTN_R, "R");
+    }
 
     // system pills: small, tucked against the top edge, rarely touched
     const float pillY = 0.050f * H + st;
@@ -383,7 +397,16 @@ void TouchControlOverlay::Draw() {
         return;
     }
 
-    if (displaySize.x != mDisplaySize.x || displaySize.y != mDisplaySize.y || mElements.empty()) {
+    // rebuild when the display changes or when a layout-affecting setting is flipped live
+    static float sLastScale = -1.0f;
+    static int sLastEdge = -1;
+    auto cv = Context::GetInstance()->GetConsoleVariables();
+    const float scaleNow = cv->GetFloat("gTouch.Scale", 1.0f);
+    const int edgeNow = cv->GetInteger("gTouch.EdgeLayout", 0);
+    if (displaySize.x != mDisplaySize.x || displaySize.y != mDisplaySize.y || mElements.empty() ||
+        scaleNow != sLastScale || edgeNow != sLastEdge) {
+        sLastScale = scaleNow;
+        sLastEdge = edgeNow;
         RebuildLayout(displaySize);
     }
 
@@ -394,7 +417,9 @@ void TouchControlOverlay::Draw() {
         dl->AddCircle(mStickBase, mStickRadius, IM_COL32(255, 255, 255, (int)(opacity * 200)), 0, 2.5f);
         dl->AddCircleFilled(mStickPos, mStickRadius * 0.42f, IM_COL32(255, 255, 255, (int)(opacity * 230)));
     } else {
-        const ImVec2 hint(mDisplaySize.x * 0.135f, mDisplaySize.y * 0.76f);
+        const bool edgeHint =
+            Context::GetInstance()->GetConsoleVariables()->GetInteger("gTouch.EdgeLayout", 0) != 0;
+        const ImVec2 hint(mDisplaySize.x * (edgeHint ? 0.135f : 0.17f), mDisplaySize.y * (edgeHint ? 0.76f : 0.70f));
         dl->AddCircle(hint, mStickRadius * 0.6f, IM_COL32(255, 255, 255, (int)(opacity * 90)), 0, 1.5f);
         dl->AddCircleFilled(hint, mStickRadius * 0.12f, IM_COL32(255, 255, 255, (int)(opacity * 90)));
     }
