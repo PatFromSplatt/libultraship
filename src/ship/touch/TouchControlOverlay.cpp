@@ -37,7 +37,14 @@ bool TouchControlOverlay::Enabled() {
     if (ctx == nullptr || ctx->GetConsoleVariables() == nullptr) {
         return false;
     }
+#if defined(__IOS__) || defined(__ANDROID__)
+    // Always on for touch-first platforms: with no keyboard, a disabled overlay would
+    // leave no way to reopen the menu that re-enables it. Hiding (recoverable) is the
+    // supported way to get it off screen.
+    return true;
+#else
     return ctx->GetConsoleVariables()->GetInteger("gTouch.Enabled", kEnabledDefault) != 0;
+#endif
 }
 
 void TouchControlOverlay::RebuildLayout(ImVec2 displaySize) {
