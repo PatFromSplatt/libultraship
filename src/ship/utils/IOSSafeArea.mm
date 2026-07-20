@@ -1,15 +1,15 @@
 #ifdef __IOS__
 #import <UIKit/UIKit.h>
 
-// Safe-area insets in DRAWABLE PIXELS (UIKit points premultiplied by the screen's native
-// scale), matching the coordinate space of ImGui's DisplaySize on the Metal backend.
+// Safe-area insets in UIKit POINTS — the same coordinate space as ImGui's DisplaySize
+// under the SDL2 backend (which reports window points and carries the retina factor in
+// DisplayFramebufferScale instead).
 extern "C" void GetIOSSafeAreaInsets(float* top, float* left, float* bottom, float* right) {
     UIWindow* window = UIApplication.sharedApplication.windows.firstObject;
     const UIEdgeInsets insets = window != nil ? window.safeAreaInsets : UIEdgeInsetsZero;
-    const CGFloat scale = UIScreen.mainScreen.nativeScale;
-    *top = (float)(insets.top * scale);
-    *left = (float)(insets.left * scale);
-    *bottom = (float)(insets.bottom * scale);
-    *right = (float)(insets.right * scale);
+    *top = (float)insets.top;
+    *left = (float)insets.left;
+    *bottom = (float)insets.bottom;
+    *right = (float)insets.right;
 }
 #endif

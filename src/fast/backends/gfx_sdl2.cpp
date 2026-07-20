@@ -394,7 +394,9 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
     int len = sprintf(title, "%s (%s)", gameName, gfxApiName);
 
 #ifdef __IOS__
-    Uint32 flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_SHOWN;
+    // ALLOW_HIGHDPI is essential: without it the Metal drawable is created at 1x point
+    // scale (e.g. 932x430 on a 2796x1290 panel) and the game renders at 1/9th resolution.
+    Uint32 flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI;
 #else
     Uint32 flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
 #endif
