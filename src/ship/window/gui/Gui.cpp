@@ -167,7 +167,17 @@ void Gui::ImGuiWMInit() {
         case WindowBackend::FAST3D_SDL_METAL:
             SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
             SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+#ifdef __IOS__
+            // iOS: SDL_GL_GetDrawableSize falls back to window POINTS for Metal views
+            // (UIKit only reports backing pixels for GL views), leaving ImGui's
+            // DisplayFramebufferScale at 1.0 while the ALLOW_HIGHDPI drawable is @3x —
+            // gfx_metal's RenderDrawData size guard then rejects every frame (black
+            // screen). Passing the SDL_Renderer makes the backend measure with
+            // SDL_GetRendererOutputSize (true pixels), matching macOS behavior.
+            ImGui_ImplSDL2_InitForSDLRenderer(static_cast<SDL_Window*>(mImpl.Metal.Window), mImpl.Metal.Renderer);
+#else
             ImGui_ImplSDL2_InitForMetal(static_cast<SDL_Window*>(mImpl.Metal.Window));
+#endif
             break;
 #endif
 #if defined(ENABLE_DX11) || defined(ENABLE_DX12)

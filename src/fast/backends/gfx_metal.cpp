@@ -120,8 +120,17 @@ void GfxRenderingAPIMetal::RenderDrawData(ImDrawData* drawData) {
 
     // Workaround for detecting when transitioning to/from full screen mode.
     MTL::Texture* screen_texture = mTextures[framebuffer.mTextureId].texture;
-    int fb_width = (int)(drawData->DisplaySize.x * drawData->FramebufferScale.x);
-    int fb_height = (int)(drawData->DisplaySize.y * drawData->FramebufferScale.y);
+#ifdef __IOS__
+    // Belt-and-suspenders: SDL's UIKit backend cannot report drawable pixels for Metal
+    // views, so derive the true framebuffer scale from the actual screen drawable. When
+    // the SDL2 backend already reports pixels correctly this computes the same value.
+    if (drawData->DisplaySize.x > 0.0f && drawData->DisplaySize.y > 0.0f) {
+        drawData->FramebufferScale.x = (float)screen_texture->width() / drawData->DisplaySize.x;
+        drawData->FramebufferScale.y = (float)screen_texture->height() / drawData->DisplaySize.y;
+    }
+#endif
+    int fb_width = (int)lroundf(drawData->DisplaySize.x * drawData->FramebufferScale.x);
+    int fb_height = (int)lroundf(drawData->DisplaySize.y * drawData->FramebufferScale.y);
     if (screen_texture->width() != fb_width || screen_texture->height() != fb_height)
         return;
 
