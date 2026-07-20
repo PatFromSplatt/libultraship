@@ -412,11 +412,16 @@ void TouchControlOverlay::Draw() {
 
     const float opacity = Context::GetInstance()->GetConsoleVariables()->GetFloat("gTouch.Opacity", 0.35f);
 
+    // While the settings menu is open, gameplay controls already ignore touches —
+    // stop drawing them too, so the menu stays readable. Only the gear stays visible.
+    auto gui = Context::GetInstance()->GetWindow()->GetGui();
+    const bool menuOpen = gui != nullptr && gui->GetMenuOrMenubarVisible();
+
     // stick: zone hint ring when idle, base+knob when active
-    if (mStickActive) {
+    if (!menuOpen && mStickActive) {
         dl->AddCircle(mStickBase, mStickRadius, IM_COL32(255, 255, 255, (int)(opacity * 200)), 0, 2.5f);
         dl->AddCircleFilled(mStickPos, mStickRadius * 0.42f, IM_COL32(255, 255, 255, (int)(opacity * 230)));
-    } else {
+    } else if (!menuOpen) {
         const bool edgeHint =
             Context::GetInstance()->GetConsoleVariables()->GetInteger("gTouch.EdgeLayout", 0) != 0;
         const ImVec2 hint(mDisplaySize.x * (edgeHint ? 0.135f : 0.17f), mDisplaySize.y * (edgeHint ? 0.76f : 0.70f));
@@ -425,6 +430,9 @@ void TouchControlOverlay::Draw() {
     }
 
     for (const auto& el : mElements) {
+        if (menuOpen && el.id != TouchElementId::Gear) {
+            continue;
+        }
         bool pressed = false;
         for (const auto& [finger, id] : mFingerOwner) {
             if (id == el.id) {
@@ -434,6 +442,9 @@ void TouchControlOverlay::Draw() {
         }
         if (el.id == TouchElementId::Ocarina && mOcarinaLayout) {
             pressed = true; // stays lit while the piano layout is active
+        }
+        if (el.id == TouchElementId::Gear && menuOpen) {
+            pressed = true; // lit as the "close menu" affordance
         }
         DrawElement(el, pressed, dl, opacity);
     }
