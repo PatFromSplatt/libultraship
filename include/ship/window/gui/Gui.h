@@ -107,6 +107,15 @@ class Gui {
     void UnblockGamepadNavigation();
     void ShutDownImGui(Ship::Window* window);
 
+    // Point-space scale for ImGui CHROME (padding, spacing, scrollbars, grabs) on touch
+    // platforms. Exactly 1.0f on desktop. Fonts are deliberately NOT scaled by this — see
+    // OTRGlobals::ScaleImGui. Derived from Apple's 44pt minimum touch target, which is
+    // device-independent, so iPad and older iPhones need no extra constants.
+    float GetUiScale();
+    // Pixels-per-point for the 3D scene render target (1.0f except on iOS). Public so the
+    // resolution editor can convert scene pixels back into point space for its readouts.
+    float GetNativePixelScale();
+
   protected:
     void StartFrame();
     void EndFrame();
@@ -123,10 +132,6 @@ class Gui {
 
     ImTextureID GetTextureById(int32_t id);
     void ApplyResolutionChanges();
-    // Pixels-per-point for the 3D scene render target. Exactly 1.0f on every platform except
-    // iOS, where ImGui lays out in UIKit POINTS and rasterizes at native pixels via
-    // DisplayFramebufferScale.
-    float GetNativePixelScale();
     int16_t GetIntegerScaleFactor();
     void CheckSaveCvars();
     void HandleMouseCapture();

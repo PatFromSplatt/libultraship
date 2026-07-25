@@ -62,12 +62,19 @@ void GuiWindow::SyncVisibilityConsoleVariable() {
     }
 }
 
-void GuiWindow::Draw() {
+void GuiWindow::Draw() { // NOLINT(readability-function-cognitive-complexity)
     if (!IsVisible()) {
         return;
     }
     if (mOriginalSize != ImVec2{ -1, -1 }) {
-        ImGui::SetNextWindowSize(mOriginalSize, ImGuiCond_FirstUseEver);
+        // Desktop-authored defaults exceed a phone screen. Clamp to the safe work area (the iOS
+        // insets are published there in Gui::StartFrame) and constrain resize so an imgui.ini
+        // restored from a desktop install, or a user drag, cannot push the window off-screen.
+        const ImVec2 work = ImGui::GetMainViewport()->WorkSize;
+        ImGui::SetNextWindowSize(
+            ImVec2(std::min(mOriginalSize.x, work.x * 0.95f), std::min(mOriginalSize.y, work.y * 0.95f)),
+            ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), work);
     }
     if (!ImGui::Begin(mName.c_str(), &mIsVisible, mWindowFlags)) {
         ImGui::End();

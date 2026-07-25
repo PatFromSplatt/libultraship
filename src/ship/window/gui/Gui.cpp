@@ -10,6 +10,12 @@
 #include "ship/config/Config.h"
 #include "ship/Context.h"
 #include "ship/touch/TouchControlOverlay.h"
+#include <imgui_internal.h> // ImGuiViewportP (WorkInsetMin/Max, UpdateWorkRect)
+#include <algorithm>
+
+#ifdef __IOS__
+extern "C" void GetIOSSafeAreaInsets(float* top, float* left, float* bottom, float* right);
+#endif
 #include "ship/config/ConsoleVariable.h"
 #include "fast/resource/type/Texture.h"
 #include "ship/resource/File.h"
@@ -116,11 +122,9 @@ void Gui::Init(GuiWindowInitData windowImpl) {
     mImGuiIo->Fonts->AddFontFromMemoryCompressedBase85TTF(fontawesome_compressed_data_base85, iconFontSize,
                                                           &iconsConfig, sIconsRanges);
 
-#if defined(__ANDROID__) || defined(__IOS__)
-    // Scale everything by 2 for mobile touchability
-    ImGui::GetStyle().ScaleAllSizes(2.0f);
-    mImGuiIo->FontGlobalScale = 2.0f;
-#endif
+    // NOTE: no platform style/font scaling here. OTRGlobals::ScaleImGui is the single owner of
+    // ImGui style scale and composes the platform chrome scale (Gui::GetUiScale) with the user's
+    // own setting — scaling here as well compounded them.
 
     mImGuiIniPath = Context::GetPathRelativeToAppDirectory("imgui.ini");
     mImGuiLogPath = Context::GetPathRelativeToAppDirectory("imgui_log.txt");
@@ -424,6 +428,24 @@ float Gui::GetNativePixelScale() {
 #endif
 }
 
+float Gui::GetUiScale() {
+    float base = 1.0f;
+#if defined(__ANDROID__) || defined(__IOS__)
+    // UIKit points are already density-normalized, so TEXT needs no magnification: the port's
+    // 20pt body font subtends a larger angle on a phone at 30cm than 20px does on a desktop
+    // monitor at 60cm. CHROME is what must grow, so that a default widget frame reaches the
+    // platform minimum touch target:
+    //     bodyFontPt + 2 * authoredFramePaddingY * s >= 44  =>  20 + 16s >= 44  =>  s >= 1.5
+    // 44pt is the HIG minimum on every iOS device, so this is correct on a small iPhone and a
+    // large iPad without per-device constants.
+    constexpr float kMinTouchTarget = 44.0f;
+    constexpr float kBodyFontPt = 20.0f;       // OTRGlobals::fontStandardLarger
+    constexpr float kAuthoredFramePadY = 8.0f; // UIWidgets authored padding
+    base = std::max(1.0f, (kMinTouchTarget - kBodyFontPt) / (2.0f * kAuthoredFramePadY));
+#endif
+    return base * Context::GetInstance()->GetConsoleVariables()->GetFloat("gSettings.UIScale", 1.0f);
+}
+
 void Gui::ApplyResolutionChanges() {
     ImVec2 size = ImGui::GetContentRegionAvail();
 
@@ -574,7 +596,9 @@ void Gui::DrawMenu() {
     }
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->WorkPos);
+    // The 3D scene is deliberately FULL-BLEED: only chrome respects the safe area, so the game
+    // still reaches the physical edges. Pos, not WorkPos (the size below is the full window).
+    ImGui::SetNextWindowPos(viewport->Pos);
     ImGui::SetNextWindowSize(ImVec2((int)wnd->GetWidth(), (int)wnd->GetHeight()));
     ImGui::SetNextWindowViewport(viewport->ID);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
@@ -701,6 +725,19 @@ void Gui::StartFrame() {
     ImGuiBackendNewFrame();
     ImGuiWMNewFrame();
     ImGui::NewFrame();
+#ifdef __IOS__
+    // Publish the UIKit safe-area insets (POINTS — the same space as io.DisplaySize) into the
+    // main viewport work area, AFTER NewFrame() so it survives ImGui's own inset reset. Every
+    // ImGui window that lays out against WorkPos/WorkSize then inherits the Dynamic Island and
+    // home-indicator margins for free. Must be re-applied every frame: NewFrame() copies
+    // BuildWorkInset* into WorkInset* and clears the build values.
+    float safeTop = 0.0f, safeLeft = 0.0f, safeBottom = 0.0f, safeRight = 0.0f;
+    GetIOSSafeAreaInsets(&safeTop, &safeLeft, &safeBottom, &safeRight);
+    ImGuiViewportP* vp = (ImGuiViewportP*)(void*)ImGui::GetMainViewport();
+    vp->WorkInsetMin = ImVec2(safeLeft, safeTop);
+    vp->WorkInsetMax = ImVec2(safeRight, safeBottom);
+    vp->UpdateWorkRect();
+#endif
 }
 
 void Gui::EndFrame() {
