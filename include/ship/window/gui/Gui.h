@@ -123,6 +123,10 @@ class Gui {
 
     ImTextureID GetTextureById(int32_t id);
     void ApplyResolutionChanges();
+    // Pixels-per-point for the 3D scene render target. Exactly 1.0f on every platform except
+    // iOS, where ImGui lays out in UIKit POINTS and rasterizes at native pixels via
+    // DisplayFramebufferScale.
+    float GetNativePixelScale();
     int16_t GetIntegerScaleFactor();
     void CheckSaveCvars();
     void HandleMouseCapture();

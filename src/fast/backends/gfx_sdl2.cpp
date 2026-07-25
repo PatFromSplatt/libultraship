@@ -277,7 +277,19 @@ void GfxWindowBackendSDL2::GetActiveWindowRefreshRate(uint32_t* refresh_rate) {
     *refresh_rate = mode.refresh_rate != 0 ? mode.refresh_rate : 60;
 }
 
+// SCHEDULED presentation time of the last presented frame, in 100ns ticks (see qpc_to_100ns).
+// On iOS it advances by exactly one frame interval per presented frame, so lateness accumulates
+// as real debt that IsFrameReady() repays by dropping interpolated frames. Elsewhere it keeps the
+// upstream "rebase to now" behavior.
 static uint64_t previous_time;
+#ifdef __IOS__
+// Debt past this (100 ms) is a stall, not a slow frame: app resume, scene load, first boot.
+// Re-base rather than burst-dropping a dozen frames to "catch up" on time that is gone.
+#define MAX_FRAME_DEBT_100NS 1000000
+// Hard floor so the screen can never go blank for an unbounded run of slots.
+#define MAX_CONSECUTIVE_DROPPED_FRAMES 4
+static uint32_t consecutive_dropped_frames;
+#endif
 #ifdef _WIN32
 static HANDLE mTimer;
 #endif
@@ -679,13 +691,60 @@ void GfxWindowBackendSDL2::HandleEvents() {
 #endif
 }
 
-bool GfxWindowBackendSDL2::IsFrameReady() {
-    return true;
-}
-
 static uint64_t qpc_to_100ns(uint64_t qpc) {
     const uint64_t qpc_freq = SDL_GetPerformanceFrequency();
     return qpc / qpc_freq * _100NANOSECONDS_IN_SECOND + qpc % qpc_freq * _100NANOSECONDS_IN_SECOND / qpc_freq;
+}
+
+bool GfxWindowBackendSDL2::IsFrameReady() {
+#ifdef __IOS__
+    // The engine renders ceil(targetFps / 20) interpolated frames per 20 Hz logic frame and
+    // renders them synchronously, with no wall-clock term in the game loop. So if a frame
+    // overruns its slot, the LOGIC rate falls with it and the game runs in slow motion instead
+    // of dropping frames.
+    //
+    // Dropping the render for a slot here skips StartDraw/StartFrame/Run/EndFrame — including
+    // SyncFramerateWithTime's sleep — so the logic frame completes on schedule and wall-clock
+    // game speed is restored. Audio is generated per LOGIC frame, so this cannot desync it; it
+    // repairs the feed rate. The DXGI backend has done this on Windows all along.
+    if (mTargetFps <= 0 ||
+        !Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger("gSettings.FrameDropCatchUp", 1)) {
+        return true;
+    }
+
+    const uint64_t interval = 10 * FRAME_INTERVAL_US_NUMERATOR / (uint64_t)FRAME_INTERVAL_US_DENOMINATOR;
+    const uint64_t now = qpc_to_100ns(SDL_GetPerformanceCounter());
+
+    // Not seeded yet (first frame, or the boot loop before SetTargetFps).
+    if (previous_time == 0 || now < previous_time) {
+        previous_time = now;
+        consecutive_dropped_frames = 0;
+        return true;
+    }
+
+    // previous_time is the scheduled present of the LAST frame, so this frame is due at
+    // +1 interval. If we are already past that before drawing anything, we cannot make it.
+    const uint64_t deadline = previous_time + interval;
+    if (now <= deadline) {
+        consecutive_dropped_frames = 0;
+        return true;
+    }
+
+    if ((now - deadline) > MAX_FRAME_DEBT_100NS || consecutive_dropped_frames >= MAX_CONSECUTIVE_DROPPED_FRAMES) {
+        // Stalled rather than merely slow — forgive the debt instead of burst-dropping.
+        previous_time = now;
+        consecutive_dropped_frames = 0;
+        return true;
+    }
+
+    // A whole slot behind: skip this render and charge one interval against the debt. A drop is
+    // near-free, so the debt is repaid immediately and the schedule re-converges.
+    previous_time += interval;
+    consecutive_dropped_frames++;
+    return false;
+#else
+    return true;
+#endif
 }
 
 void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
@@ -721,6 +780,16 @@ void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
     }
 #endif
     t = qpc_to_100ns(SDL_GetPerformanceCounter());
+#ifdef __IOS__
+    // Advance the schedule by exactly one interval rather than re-basing to the (possibly late)
+    // wall clock. Re-basing is what made lateness free: the deadline moved with us, so the loop
+    // just ran slow forever. Keeping the schedule lets IsFrameReady() see the debt and repay it
+    // by dropping a frame. Past MAX_FRAME_DEBT_100NS it is a stall, not slowness — re-base then.
+    previous_time = (uint64_t)next;
+    if (t > previous_time && (t - previous_time) > MAX_FRAME_DEBT_100NS) {
+        previous_time = t;
+    }
+#else
     if (left > 0 && t - next < 10000) {
         // In case it takes some time for the application to wake up after sleep,
         // or inaccurate mTimer,
@@ -728,6 +797,7 @@ void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
         t = next;
     }
     previous_time = t;
+#endif
 }
 
 void GfxWindowBackendSDL2::SwapBuffersBegin() {

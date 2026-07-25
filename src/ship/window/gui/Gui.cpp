@@ -384,6 +384,46 @@ void Gui::ImGuiWMNewFrame() {
     }
 }
 
+float Gui::GetNativePixelScale() {
+#ifdef __IOS__
+    // The GUI layer works entirely in UIKit POINTS: io.DisplaySize, touch hit-testing, the touch
+    // overlay layout and safe-area insets are all points, and ImGui rasterizes at native pixels
+    // via DisplayFramebufferScale. The 3D scene framebuffer is NOT part of that — it is a real
+    // render target, so sizing it from GetContentRegionAvail() (points) renders the game at 1/3
+    // linear (1/9 pixels) and upscales at composite time. Return pixels-per-point so the scene,
+    // and only the scene, can be sized in native pixels.
+    if (!Context::GetInstance()->GetConsoleVariables()->GetInteger("gSettings.NativeResolution", 1)) {
+        return 1.0f;
+    }
+    if (Context::GetInstance()->GetWindow()->GetWindowBackend() != WindowBackend::FAST3D_SDL_METAL) {
+        return 1.0f;
+    }
+
+    float scale = 0.0f;
+    if (mImpl.Metal.Renderer != nullptr && mImpl.Metal.Window != nullptr) {
+        int pixelWidth = 0, pixelHeight = 0, pointWidth = 0, pointHeight = 0;
+        SDL_GetRendererOutputSize(static_cast<SDL_Renderer*>(mImpl.Metal.Renderer), &pixelWidth, &pixelHeight);
+        SDL_GetWindowSize(static_cast<SDL_Window*>(mImpl.Metal.Window), &pointWidth, &pointHeight);
+        if (pixelWidth > 0 && pointWidth > 0) {
+            scale = (float)pixelWidth / (float)pointWidth;
+        }
+    }
+    if (scale <= 0.0f && mImGuiIo != nullptr) {
+        scale = mImGuiIo->DisplayFramebufferScale.x;
+    }
+    if (!(scale >= 1.0f)) { // also catches NaN and a failed query
+        scale = 1.0f;
+    }
+    if (scale > 4.0f) {
+        scale = 4.0f;
+    }
+    return scale;
+#else
+    // Desktop/console: mCurDimensions is already in the same space as the viewport.
+    return 1.0f;
+#endif
+}
+
 void Gui::ApplyResolutionChanges() {
     ImVec2 size = ImGui::GetContentRegionAvail();
 
@@ -400,8 +440,18 @@ void Gui::ApplyResolutionChanges() {
 
     const uint32_t minResolutionWidth = 320;
     const uint32_t minResolutionHeight = 240;
-    const uint32_t maxResolutionWidth = 8096;  // the renderer's actual limit is 16384
-    const uint32_t maxResolutionHeight = 4320; // on either axis. if you have the VRAM for it.
+    // These caps are point-space upstream. On iOS mCurDimensions is in native pixels, so scale
+    // them or a 2796-wide base clips at 8096 as soon as the internal-resolution slider passes
+    // ~2.9x, silently distorting the aspect ratio. Hard ceiling is the renderer's 16384 limit.
+    const float resolutionScale = GetNativePixelScale();
+    uint32_t maxResolutionWidth = (uint32_t)(8096.0f * resolutionScale);
+    uint32_t maxResolutionHeight = (uint32_t)(4320.0f * resolutionScale);
+    if (maxResolutionWidth > 16384) {
+        maxResolutionWidth = 16384;
+    }
+    if (maxResolutionHeight > 16384) {
+        maxResolutionHeight = 16384;
+    }
     uint32_t newWidth;
     uint32_t newHeight;
     mInterpreter.lock()->GetCurDimensions(&newWidth, &newHeight);
@@ -444,6 +494,20 @@ void Gui::ApplyResolutionChanges() {
 }
 
 int16_t Gui::GetIntegerScaleFactor() {
+    // mGameWindowViewport is in ImGui POINTS; mCurDimensions is the scene render target in native
+    // PIXELS (identical spaces off iOS). Integer scaling is a point-space concept — the image is
+    // laid out inside a point-space ImGui window — so bring the scene dimensions back into points
+    // before dividing, otherwise every quotient truncates to 0 and the factor clamps to 1.
+    const float nativeScale = GetNativePixelScale();
+    uint32_t curWidth = (uint32_t)(mInterpreter.lock()->mCurDimensions.width / nativeScale);
+    uint32_t curHeight = (uint32_t)(mInterpreter.lock()->mCurDimensions.height / nativeScale);
+    if (curWidth == 0) {
+        curWidth = 1;
+    }
+    if (curHeight == 0) {
+        curHeight = 1;
+    }
+
     if (!Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger(
             CVAR_PREFIX_ADVANCED_RESOLUTION ".IntegerScale.FitAutomatically", 0)) {
         int16_t factor = Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger(
@@ -455,19 +519,15 @@ int16_t Gui::GetIntegerScaleFactor() {
 
             // The same comparison as below, but checked against the configured factor
             if (((float)mInterpreter.lock()->mGameWindowViewport.height /
-                 mInterpreter.lock()->mGameWindowViewport.width) <
-                ((float)mInterpreter.lock()->mCurDimensions.height / mInterpreter.lock()->mCurDimensions.width)) {
-                if ((uint32_t)factor >
-                    mInterpreter.lock()->mGameWindowViewport.height / mInterpreter.lock()->mCurDimensions.height) {
+                 mInterpreter.lock()->mGameWindowViewport.width) < ((float)curHeight / curWidth)) {
+                if ((uint32_t)factor > mInterpreter.lock()->mGameWindowViewport.height / curHeight) {
                     // Scale to window height
-                    factor =
-                        mInterpreter.lock()->mGameWindowViewport.height / mInterpreter.lock()->mCurDimensions.height;
+                    factor = mInterpreter.lock()->mGameWindowViewport.height / curHeight;
                 }
             } else {
-                if ((uint32_t)factor >
-                    mInterpreter.lock()->mGameWindowViewport.width / mInterpreter.lock()->mCurDimensions.width) {
+                if ((uint32_t)factor > mInterpreter.lock()->mGameWindowViewport.width / curWidth) {
                     // Scale to window width
-                    factor = mInterpreter.lock()->mGameWindowViewport.width / mInterpreter.lock()->mCurDimensions.width;
+                    factor = mInterpreter.lock()->mGameWindowViewport.width / curWidth;
                 }
             }
         }
@@ -481,12 +541,12 @@ int16_t Gui::GetIntegerScaleFactor() {
 
         // Compare aspect ratios of game framebuffer and GUI
         if (((float)mInterpreter.lock()->mGameWindowViewport.height / mInterpreter.lock()->mGameWindowViewport.width) <
-            ((float)mInterpreter.lock()->mCurDimensions.height / mInterpreter.lock()->mCurDimensions.width)) {
+            ((float)curHeight / curWidth)) {
             // Scale to window height
-            factor = mInterpreter.lock()->mGameWindowViewport.height / mInterpreter.lock()->mCurDimensions.height;
+            factor = mInterpreter.lock()->mGameWindowViewport.height / curHeight;
         } else {
             // Scale to window width
-            factor = mInterpreter.lock()->mGameWindowViewport.width / mInterpreter.lock()->mCurDimensions.width;
+            factor = mInterpreter.lock()->mGameWindowViewport.width / curWidth;
         }
 
         // Add screen bounds offset, if set.
@@ -666,8 +726,16 @@ void Gui::CalculateGameViewport() {
     mainPos.x -= mTemporaryWindowPos.x;
     mainPos.y -= mTemporaryWindowPos.y;
     ImVec2 size = ImGui::GetContentRegionAvail();
-    mInterpreter.lock()->mCurDimensions.width = (uint32_t)(size.x * mInterpreter.lock()->mCurDimensions.internal_mul);
-    mInterpreter.lock()->mCurDimensions.height = (uint32_t)(size.y * mInterpreter.lock()->mCurDimensions.internal_mul);
+    // `size` is in ImGui POINTS. mCurDimensions is the 3D scene RENDER TARGET and must be in
+    // native pixels; on iOS the two differ by DisplayFramebufferScale (3.0 on a 15 Pro Max).
+    // Everything below deliberately stays in points: mGameWindowViewport, the ImGui::Image quad,
+    // the touch overlay and safe-area insets. nativeScale is exactly 1.0f off iOS, so this is a
+    // no-op on desktop.
+    const float nativeScale = GetNativePixelScale();
+    mInterpreter.lock()->mCurDimensions.width =
+        (uint32_t)(size.x * nativeScale * mInterpreter.lock()->mCurDimensions.internal_mul);
+    mInterpreter.lock()->mCurDimensions.height =
+        (uint32_t)(size.y * nativeScale * mInterpreter.lock()->mCurDimensions.internal_mul);
     mInterpreter.lock()->mGameWindowViewport.x = (int16_t)mainPos.x;
     mInterpreter.lock()->mGameWindowViewport.y = (int16_t)mainPos.y;
     mInterpreter.lock()->mGameWindowViewport.width = (int16_t)size.x;
