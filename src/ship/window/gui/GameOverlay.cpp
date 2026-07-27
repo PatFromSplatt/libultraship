@@ -20,6 +20,7 @@ GameOverlay::~GameOverlay() {
 
 void GameOverlay::LoadFont(const std::string& name, float fontSize, const ResourceIdentifier& identifier) {
     ImGuiIO& io = ImGui::GetIO();
+    fontSize *= Context::GetInstance()->GetWindow()->GetGui()->GetFontRasterScale();
     auto initData = std::make_shared<ResourceInitData>();
     initData->Format = RESOURCE_FORMAT_BINARY;
     initData->Type = static_cast<uint32_t>(RESOURCE_TYPE_FONT);
@@ -39,6 +40,7 @@ void GameOverlay::LoadFont(const std::string& name, float fontSize, const Resour
 
 void GameOverlay::LoadFont(const std::string& name, float fontSize, const std::string& path) {
     ImGuiIO& io = ImGui::GetIO();
+    fontSize *= Context::GetInstance()->GetWindow()->GetGui()->GetFontRasterScale();
     auto initData = std::make_shared<ResourceInitData>();
     initData->Format = RESOURCE_FORMAT_BINARY;
     initData->Type = static_cast<uint32_t>(RESOURCE_TYPE_FONT);
@@ -140,7 +142,10 @@ ImVec2 GameOverlay::CalculateTextSize(const char* text, const char* textEnd, boo
     }
 
     ImFont* font = mCurrentFont == "Default" ? g.Font : mFonts[mCurrentFont];
-    const float fontSize = font->FontSize;
+    // Measure at the EFFECTIVE displayed size: TextDraw renders through PushFont, which applies
+    // FontGlobalScale, so measuring the raw atlas size mis-sizes every overlay by that factor.
+    // (Critical once the atlas is rasterized larger than 1x and FontGlobalScale is < 1.)
+    const float fontSize = font->FontSize * ImGui::GetIO().FontGlobalScale * font->Scale;
     if (text == textDisplayEnd) {
         return ImVec2(0.0f, fontSize);
     }

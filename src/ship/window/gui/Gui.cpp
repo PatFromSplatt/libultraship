@@ -12,6 +12,9 @@
 #include "ship/touch/TouchControlOverlay.h"
 #include <imgui_internal.h> // ImGuiViewportP (WorkInsetMin/Max, UpdateWorkRect)
 #include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <system_error>
 
 #ifdef __IOS__
 extern "C" void GetIOSSafeAreaInsets(float* top, float* left, float* bottom, float* right);
@@ -108,10 +111,28 @@ void Gui::Init(GuiWindowInitData windowImpl) {
     mImGuiIo = &ImGui::GetIO();
     mImGuiIo->ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NoMouseCursorChange;
 
+#ifdef __IOS__
+    // Latch the font raster scale BEFORE any font is loaded. Deliberately queried from SDL and
+    // not from mImGuiIo->DisplayFramebufferScale: that field is populated per-frame by the SDL2
+    // backend and is still 1.0 here, which would silently disable crisp fonts. Also deliberately
+    // not GetNativePixelScale(), which early-returns on a CVar/backend check that is right for
+    // the 3D target and wrong for fonts.
+    if (Context::GetInstance()->GetConsoleVariables()->GetInteger("gSettings.CrispFonts", 1) &&
+        mImpl.Metal.Renderer != nullptr && mImpl.Metal.Window != nullptr) {
+        int pixelWidth = 0, pixelHeight = 0, pointWidth = 0, pointHeight = 0;
+        SDL_GetRendererOutputSize(static_cast<SDL_Renderer*>(mImpl.Metal.Renderer), &pixelWidth, &pixelHeight);
+        SDL_GetWindowSize(static_cast<SDL_Window*>(mImpl.Metal.Window), &pointWidth, &pointHeight);
+        if (pixelWidth > 0 && pointWidth > 0) {
+            const float scale = (float)pixelWidth / (float)pointWidth;
+            mFontRasterScale = std::clamp(scale, 1.0f, 3.0f);
+        }
+    }
+#endif
+
     // Add Font Awesome and merge it into the default font.
     mImGuiIo->Fonts->AddFontDefault();
     // This must match the default font size, which is 13.0f.
-    float baseFontSize = 13.0f;
+    float baseFontSize = 13.0f * mFontRasterScale;
     // FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
     float iconFontSize = baseFontSize * 2.0f / 3.0f;
     static const ImWchar sIconsRanges[] = { ICON_MIN_FA, ICON_MAX_16_FA, 0 };
@@ -128,6 +149,22 @@ void Gui::Init(GuiWindowInitData windowImpl) {
 
     mImGuiIniPath = Context::GetPathRelativeToAppDirectory("imgui.ini");
     mImGuiLogPath = Context::GetPathRelativeToAppDirectory("imgui_log.txt");
+
+    // imgui.ini stores window pos/size in points. If the UI scale changed since it was written
+    // (including geometry inherited from a desktop install), restored windows can land larger
+    // than the screen or with their title bar above y=0 — undraggable on a touch device. Stamp
+    // the applied scale and discard stale geometry before ImGui reads the file.
+    {
+        auto cvars = Context::GetInstance()->GetConsoleVariables();
+        const float appliedScale = GetUiScale() * mFontRasterScale;
+        if (std::fabs(cvars->GetFloat("gSettings.LastUiScaleApplied", 0.0f) - appliedScale) > 0.001f) {
+            std::error_code ec;
+            std::filesystem::remove(mImGuiIniPath, ec);
+            cvars->SetFloat("gSettings.LastUiScaleApplied", appliedScale);
+            cvars->Save();
+        }
+    }
+
     mImGuiIo->IniFilename = mImGuiIniPath.c_str();
     mImGuiIo->LogFilename = mImGuiLogPath.c_str();
 
@@ -426,6 +463,10 @@ float Gui::GetNativePixelScale() {
     // Desktop/console: mCurDimensions is already in the same space as the viewport.
     return 1.0f;
 #endif
+}
+
+float Gui::GetFontRasterScale() const {
+    return mFontRasterScale;
 }
 
 float Gui::GetUiScale() {

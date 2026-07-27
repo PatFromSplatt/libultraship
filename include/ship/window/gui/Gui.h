@@ -115,6 +115,12 @@ class Gui {
     // Pixels-per-point for the 3D scene render target (1.0f except on iOS). Public so the
     // resolution editor can convert scene pixels back into point space for its readouts.
     float GetNativePixelScale();
+    // Factor the font atlas is rasterized at, LATCHED once during Init. ImGui emits geometry in
+    // points and the backend blits at DisplayFramebufferScale, so rasterizing at 1x on a 3x
+    // screen means every glyph is a 3x upscale. Rasterize at this and divide FontGlobalScale by
+    // it to keep the displayed size identical but sharp. Latched because font loading and text
+    // measurement must never disagree.
+    float GetFontRasterScale() const;
 
   protected:
     void StartFrame();
@@ -153,6 +159,7 @@ class Gui {
     std::unordered_map<std::string, GuiTextureMetadata> mGuiTextures;
     uint32_t mCursorVisibleTicks = 180;
     uint32_t mCursorVisibleSeconds = 3;
+    float mFontRasterScale = 1.0f;
 };
 } // namespace Ship
 
