@@ -325,6 +325,10 @@ void Gui::StartFrame() {
     vp->WorkInsetMax = ImVec2(safeRight, safeBottom);
     vp->UpdateWorkRect();
 #endif
+#if defined(__IOS__) || defined(__ANDROID__)
+    // Touch drag-to-scroll: applied after NewFrame so HoveredWindow is current.
+    TouchControlOverlay::Instance().ApplyTouchScroll();
+#endif
 }
 
 void Gui::EndFrame() {
