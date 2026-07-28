@@ -81,6 +81,7 @@ file(GLOB Source_Files__Touch RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "touch/*.cpp"
 
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     list(APPEND Source_Files__Touch ${CMAKE_CURRENT_SOURCE_DIR}/touch/IOSGyro.mm)
+    list(APPEND Source_Files__Touch ${CMAKE_CURRENT_SOURCE_DIR}/touch/IOSHaptics.mm)
 endif()
 
 source_group("touch" FILES ${Source_Files__Touch})

@@ -28,6 +28,7 @@ extern "C" void GetIOSSafeAreaInsets(float* top, float* left, float* bottom, flo
 extern "C" void IOSGyroSetEnabled(bool enabled, float sensitivity);
 extern "C" void IOSGyroSetSensitivity(float sensitivity);
 extern "C" void IOSGyroRefreshOrientation(void);
+extern "C" void IOSHapticsTap(int kind); // IOSHaptics.mm
 #endif
 
 TouchControlOverlay& TouchControlOverlay::Instance() {
@@ -207,6 +208,7 @@ void TouchControlOverlay::HandlePillRelease(TouchElementId id) {
 
 void TouchControlOverlay::SetPhysicalControllerConnected(bool connected) {
     mAutoHidden = connected;
+    mPhysicalControllerConnected = connected;
 }
 
 void TouchControlOverlay::HandleFingerEvent(const SDL_TouchFingerEvent& finger, uint32_t type) {
@@ -238,6 +240,13 @@ void TouchControlOverlay::HandleFingerEvent(const SDL_TouchFingerEvent& finger, 
             if (el != nullptr) {
                 mFingerOwner[finger.fingerId] = el->id;
                 ComposeButtons();
+#ifdef __IOS__
+                // A micro-impact under the glass when a button claims the finger. Ocarina keys
+                // hit harder so playing feels like pressing piano keys, not tapping a photo.
+                if (Context::GetInstance()->GetConsoleVariables()->GetInteger("gTouch.Haptics", 1)) {
+                    IOSHapticsTap(el->id >= TouchElementId::NoteD ? 2 : 0);
+                }
+#endif
             } else if (px.x < mDisplaySize.x * 0.40f && px.y > mDisplaySize.y * 0.30f && !mStickActive) {
                 // floating stick: base spawns where the finger lands in the left zone
                 mStickActive = true;
@@ -247,6 +256,11 @@ void TouchControlOverlay::HandleFingerEvent(const SDL_TouchFingerEvent& finger, 
                 mStickBase = fixed ? ImVec2(mDisplaySize.x * 0.17f, mDisplaySize.y * 0.70f) : px;
                 mStickPos = mStickBase;
                 UpdateStick(px);
+#ifdef __IOS__
+                if (Context::GetInstance()->GetConsoleVariables()->GetInteger("gTouch.Haptics", 1)) {
+                    IOSHapticsTap(1); // medium: the stick base has landed under the thumb
+                }
+#endif
             } else if (mCameraFinger == -1) {
                 mCameraFinger = finger.fingerId;
                 mFingerOwner[finger.fingerId] = TouchElementId::CameraZone;

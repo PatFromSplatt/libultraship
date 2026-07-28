@@ -96,8 +96,9 @@ endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     find_library(COREMOTION CoreMotion)
+    find_library(COREHAPTICS CoreHaptics)
     find_library(UIKIT UIKit)
-    target_link_libraries(libultraship PRIVATE ${COREMOTION} ${UIKIT})
+    target_link_libraries(libultraship PRIVATE ${COREMOTION} ${COREHAPTICS} ${UIKIT})
 endif()
 
 if (USE_OPENGLES)

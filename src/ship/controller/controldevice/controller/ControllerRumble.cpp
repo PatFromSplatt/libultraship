@@ -7,6 +7,12 @@
 
 #include "ship/controller/controldevice/controller/mapping/factories/RumbleMappingFactory.h"
 
+#ifdef __IOS__
+#include "ship/touch/TouchControlOverlay.h"
+extern "C" void IOSHapticsRumbleStart(float intensity); // IOSHaptics.mm
+extern "C" void IOSHapticsRumbleStop(void);
+#endif
+
 namespace Ship {
 ControllerRumble::ControllerRumble(uint8_t portIndex) : mPortIndex(portIndex) {
 }
@@ -14,13 +20,35 @@ ControllerRumble::ControllerRumble(uint8_t portIndex) : mPortIndex(portIndex) {
 ControllerRumble::~ControllerRumble() {
 }
 
+#ifdef __IOS__
+// The N64 Rumble Pak line, routed to the Taptic Engine during touch play. Only port 1, and
+// only while the overlay is the active controller — when a physical pad is attached (overlay
+// auto-hidden) its own rumble mapping handles it and the phone stays quiet in its stand.
+static bool ShouldPhoneRumble(uint8_t portIndex) {
+    return portIndex == 0 && TouchControlOverlay::Instance().Enabled() &&
+           !TouchControlOverlay::Instance().IsPhysicalControllerConnected() &&
+           Context::GetInstance()->GetConsoleVariables()->GetInteger("gTouch.GameRumble", 1);
+}
+#endif
+
 void ControllerRumble::StartRumble() {
+#ifdef __IOS__
+    if (ShouldPhoneRumble(mPortIndex)) {
+        IOSHapticsRumbleStart(
+            Context::GetInstance()->GetConsoleVariables()->GetFloat("gTouch.GameRumbleStrength", 0.75f));
+    }
+#endif
     for (auto [id, mapping] : mRumbleMappings) {
         mapping->StartRumble();
     }
 }
 
 void ControllerRumble::StopRumble() {
+#ifdef __IOS__
+    if (mPortIndex == 0) {
+        IOSHapticsRumbleStop(); // unconditional: never leave the motor running behind a CVar flip
+    }
+#endif
     for (auto [id, mapping] : mRumbleMappings) {
         mapping->StopRumble();
     }
