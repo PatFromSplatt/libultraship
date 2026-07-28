@@ -1,6 +1,7 @@
 #include "ship/touch/TouchControlOverlay.h"
 #include "ship/touch/TouchControllerState.h"
 #include "ship/Context.h"
+#include <imgui_internal.h>
 #include "ship/config/ConsoleVariable.h"
 #include "ship/window/Window.h"
 #include "ship/window/gui/Gui.h"
@@ -25,6 +26,8 @@ static constexpr int32_t kEnabledDefault = 0;
 #ifdef __IOS__
 extern "C" void GetIOSSafeAreaInsets(float* top, float* left, float* bottom, float* right);
 extern "C" void IOSGyroSetEnabled(bool enabled, float sensitivity);
+extern "C" void IOSGyroSetSensitivity(float sensitivity);
+extern "C" void IOSGyroRefreshOrientation(void);
 #endif
 
 TouchControlOverlay& TouchControlOverlay::Instance() {
@@ -214,6 +217,12 @@ void TouchControlOverlay::HandleFingerEvent(const SDL_TouchFingerEvent& finger, 
     auto gui = Context::GetInstance()->GetWindow()->GetGui();
     const bool menuOpen = gui != nullptr && gui->GetMenuOrMenubarVisible();
 
+    // Deliberately above the hidden/auto-hidden early return: the overlay hides itself when a
+    // physical controller is attached, but the menu is still driven entirely by touch.
+    if (menuOpen && HandleMenuScrollFinger(px, finger.fingerId, type)) {
+        return;
+    }
+
     if (mHidden || mAutoHidden) {
         // only the ghost dot (bottom-right corner) unhides
         if (type == SDL_FINGERUP && px.x > mDisplaySize.x * 0.94f && px.y > mDisplaySize.y * 0.88f) {
@@ -226,13 +235,6 @@ void TouchControlOverlay::HandleFingerEvent(const SDL_TouchFingerEvent& finger, 
     switch (type) {
         case SDL_FINGERDOWN: {
             TouchElement* el = HitTest(px);
-            if (menuOpen) {
-                // menu drives via touch-as-mouse; only the gear pill stays live
-                if (el != nullptr && el->id == TouchElementId::Gear) {
-                    mFingerOwner[finger.fingerId] = el->id;
-                }
-                return;
-            }
             if (el != nullptr) {
                 mFingerOwner[finger.fingerId] = el->id;
                 ComposeButtons();
@@ -370,6 +372,110 @@ void TouchControlOverlay::DrawElement(const TouchElement& el, bool pressed, ImDr
     }
 }
 
+bool TouchControlOverlay::HandleMenuScrollFinger(ImVec2 px, SDL_FingerID id, uint32_t type) {
+    switch (type) {
+        case SDL_FINGERDOWN: {
+            if (!mHidden && !mAutoHidden) {
+                TouchElement* el = HitTest(px);
+                if (el != nullptr && el->id == TouchElementId::Gear) {
+                    mFingerOwner[id] = el->id; // the gear pill stays live while the menu is open
+                    return true;
+                }
+            }
+            if (mScrollFinger == -1) {
+                mScrollFinger = id;
+                mScrollStart = px;
+                mScrollLast = px;
+                mScrollAccumX = mScrollAccumY = 0.0f;
+                mScrollPastSlop = false;
+                mScrollRejected = false;
+                mScrollWindowId = 0;
+            }
+            return true;
+        }
+        case SDL_FINGERMOTION: {
+            if (id != mScrollFinger) {
+                return true; // menu is open: no other finger does anything
+            }
+            const float dx = px.x - mScrollLast.x;
+            const float dy = px.y - mScrollLast.y;
+            mScrollLast = px;
+            if (!mScrollPastSlop) {
+                // Tap slop. Below this the touch is still a plain press, so buttons, checkboxes
+                // and sliders behave exactly as before.
+                if (std::max(std::fabs(px.x - mScrollStart.x), std::fabs(px.y - mScrollStart.y)) < 10.0f) {
+                    return true;
+                }
+                mScrollPastSlop = true;
+            }
+            mScrollAccumX += dx;
+            mScrollAccumY += dy;
+            return true;
+        }
+        case SDL_FINGERUP: {
+            if (id != mScrollFinger) {
+                return false; // fall through so a gear-pill release still fires
+            }
+            const bool wasTap = !mScrollPastSlop;
+            mScrollFinger = -1;
+            mScrollPastSlop = false;
+            mScrollRejected = false;
+            mScrollWindowId = 0;
+            mScrollAccumX = mScrollAccumY = 0.0f;
+            // A tap while the overlay is hidden must still reach the ghost-dot unhide test.
+            return !(wasTap && (mHidden || mAutoHidden));
+        }
+        default:
+            return false;
+    }
+}
+
+void TouchControlOverlay::ApplyTouchScroll() {
+    const float dx = mScrollAccumX;
+    const float dy = mScrollAccumY;
+    mScrollAccumX = mScrollAccumY = 0.0f;
+    if (mScrollFinger == -1 || mScrollRejected || !mScrollPastSlop) {
+        return;
+    }
+    ImGuiContext* g = ImGui::GetCurrentContext();
+    if (g == nullptr) {
+        return;
+    }
+
+    if (mScrollWindowId == 0) {
+        // Latch once, on the first frame past slop. NewFrame() has already computed
+        // HoveredWindow from the touch-as-mouse position SDL synthesised for this same finger,
+        // so it is the window the thumb is genuinely on. Walk up to the innermost ancestor that
+        // actually has scroll range.
+        ImGuiWindow* w = g->HoveredWindow;
+        while (w != nullptr && w->ScrollMax.y <= 0.0f && w->ScrollMax.x <= 0.0f &&
+               (w->Flags & ImGuiWindowFlags_ChildWindow) != 0) {
+            w = w->ParentWindow;
+        }
+        if (w == nullptr || (w->ScrollMax.y <= 0.0f && w->ScrollMax.x <= 0.0f) ||
+            (w->Flags & ImGuiWindowFlags_NoScrollWithMouse) != 0) {
+            mScrollRejected = true; // nothing to scroll here; leave the touch alone
+            return;
+        }
+        mScrollWindowId = w->ID;
+        // Past the slop this is a scroll, not a press: drop any control the press had grabbed
+        // so a slider or checkbox under the thumb is not dragged while scrolling.
+        ImGui::ClearActiveID();
+    }
+
+    ImGuiWindow* target = ImGui::FindWindowByID(mScrollWindowId);
+    if (target == nullptr) {
+        mScrollRejected = true;
+        return;
+    }
+    if (target->ScrollMax.y > 0.0f) {
+        ImGui::SetScrollY(target, ImClamp(target->Scroll.y - dy, 0.0f, target->ScrollMax.y));
+    }
+    if (target->ScrollMax.x > 0.0f) {
+        ImGui::SetScrollX(target, ImClamp(target->Scroll.x - dx, 0.0f, target->ScrollMax.x));
+    }
+}
+
 void TouchControlOverlay::Draw() {
     if (!Enabled()) {
         return;
@@ -377,13 +483,24 @@ void TouchControlOverlay::Draw() {
     auto& state = TouchControllerState::Instance();
 
 #ifdef __IOS__
-    // keep the gyro shim in sync with its CVars (start/stop is idempotent)
+    // Track the CVar the GAME reads (z_player.c Ship_HandleFirstPersonAiming). Driving a
+    // separate gTouch.* toggle span up CoreMotion for a field nothing consumed — which is why
+    // gyro appeared completely dead.
     static bool sGyroWasEnabled = false;
+    static float sGyroLastSensitivity = -1.0f;
     auto cvars = Context::GetInstance()->GetConsoleVariables();
-    const bool gyroEnabled = cvars->GetInteger("gTouch.GyroEnabled", 0) != 0;
+    const bool gyroEnabled = cvars->GetInteger("gEnhancements.Camera.FirstPerson.GyroEnabled", 0) != 0;
+    const float gyroSensitivity = cvars->GetFloat("gTouch.GyroSensitivity", 1.0f);
     if (gyroEnabled != sGyroWasEnabled) {
-        IOSGyroSetEnabled(gyroEnabled, cvars->GetFloat("gTouch.GyroSensitivity", 1.0f));
+        IOSGyroSetEnabled(gyroEnabled, gyroSensitivity);
         sGyroWasEnabled = gyroEnabled;
+        sGyroLastSensitivity = gyroSensitivity;
+    } else if (gyroEnabled) {
+        if (gyroSensitivity != sGyroLastSensitivity) {
+            IOSGyroSetSensitivity(gyroSensitivity);
+            sGyroLastSensitivity = gyroSensitivity;
+        }
+        IOSGyroRefreshOrientation();
     }
 #endif
 

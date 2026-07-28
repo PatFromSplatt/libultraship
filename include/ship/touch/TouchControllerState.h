@@ -15,6 +15,8 @@ struct TouchControllerState {
     std::atomic<float> cameraY{ 0.0f };
     std::atomic<float> gyroX{ 0.0f }; // device rotation rate, consumed via OSContPad gyro fields
     std::atomic<float> gyroY{ 0.0f };
+    std::atomic<uint32_t> gyroSeq{ 0 }; // bumped per sensor sample; a stalled sensor must not
+                                        // leave a stale rate applied forever
 
     static TouchControllerState& Instance() {
         static TouchControllerState sInstance;

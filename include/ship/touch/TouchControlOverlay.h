@@ -48,7 +48,8 @@ class TouchControlOverlay {
     static TouchControlOverlay& Instance();
 
     void HandleFingerEvent(const SDL_TouchFingerEvent& finger, uint32_t type);
-    void Draw(); // call once per frame from Gui::DrawGame
+    void Draw();             // call once per frame from Gui::DrawGame
+    void ApplyTouchScroll(); // call once per frame from Gui::StartFrame, right after NewFrame()
     void SetPhysicalControllerConnected(bool connected);
     bool IsOcarinaLayout() const {
         return mOcarinaLayout;
@@ -72,6 +73,18 @@ class TouchControlOverlay {
     float mStickRadius = 0.0f;
 
     SDL_FingerID mCameraFinger = -1;
+
+    // Menu drag-to-scroll. iOS never emits SDL_MOUSEWHEEL and ImGui has no touch scrolling, so
+    // a tracked finger drag is the menu's only scroll input.
+    bool HandleMenuScrollFinger(ImVec2 px, SDL_FingerID id, uint32_t type);
+    SDL_FingerID mScrollFinger = -1;
+    ImVec2 mScrollStart{};
+    ImVec2 mScrollLast{};
+    float mScrollAccumX = 0.0f;
+    float mScrollAccumY = 0.0f;
+    bool mScrollPastSlop = false;
+    bool mScrollRejected = false;
+    unsigned int mScrollWindowId = 0;
     ImVec2 mLastCameraPx{};
     float mCamAccumX = 0.0f;
     float mCamAccumY = 0.0f;

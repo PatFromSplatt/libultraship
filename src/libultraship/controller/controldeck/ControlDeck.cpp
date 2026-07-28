@@ -86,11 +86,15 @@ void ControlDeck::WriteToOSContPad(OSContPad* pad) {
         pad[0].right_stick_x = (int8_t)(camX * 127.0f);
         pad[0].right_stick_y = (int8_t)(camY * 127.0f);
     }
-    const float gyroX = touch.gyroX.load();
-    const float gyroY = touch.gyroY.load();
-    if (gyroX != 0.0f || gyroY != 0.0f) {
-        pad[0].gyro_x += gyroX;
-        pad[0].gyro_y += gyroY;
+    // Gyro is a RATE, matching SDLGyroMapping::UpdatePad — assign it, never accumulate, or the
+    // aim drifts away permanently. If the sensor stops delivering samples (disabled, or the app
+    // was backgrounded) the last rate must not stay applied, so track the sample counter.
+    static uint32_t sLastGyroSeq = 0;
+    const uint32_t gyroSeq = touch.gyroSeq.load();
+    if (gyroSeq != sLastGyroSeq) {
+        sLastGyroSeq = gyroSeq;
+        pad[0].gyro_x = touch.gyroX.load();
+        pad[0].gyro_y = touch.gyroY.load();
     }
 }
 } // namespace LUS
