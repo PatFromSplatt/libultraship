@@ -23,6 +23,10 @@ enum class TouchElementId {
     Ocarina,
     Eye,
     CameraZone, // implicit: any unclaimed touch area
+    DUp,
+    DDown,
+    DLeft,
+    DRight,
     NoteD,
     NoteCDown,
     NoteCRight,
@@ -57,9 +61,10 @@ class TouchControlOverlay {
     bool IsOcarinaLayout() const {
         return mOcarinaLayout;
     }
+    // Public: the rumble path asks whether the overlay is the active controller.
+    bool Enabled();
 
   private:
-    bool Enabled();
     void RebuildLayout(ImVec2 displaySize);
     TouchElement* HitTest(ImVec2 px);
     void UpdateStick(ImVec2 px);

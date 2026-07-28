@@ -107,6 +107,19 @@ void TouchControlOverlay::RebuildLayout(ImVec2 displaySize) {
         pill(TouchElementId::NoteCUp, x += step, keyY, hw, hh, BTN_CUP, "^");
     }
 
+    if (!mOcarinaLayout && Context::GetInstance()->GetConsoleVariables()->GetInteger("gTouch.ShowDpad", 0)) {
+        // Optional D-pad, off by default: it exists for the D-pad enhancements (item equips,
+        // ArrowCycle, D-pad ocarina), which are physically unpressable by touch without it.
+        // Left-middle, above the floating-stick spawn zone's usual thumb position.
+        const float dX = 0.115f * W + sl;
+        const float dY = 0.40f * H;
+        const float dSp = 0.062f * H * scale;
+        circle(TouchElementId::DUp, dX, dY - dSp, 0.036f * H, BTN_DUP, "^");
+        circle(TouchElementId::DDown, dX, dY + dSp, 0.036f * H, BTN_DDOWN, "v");
+        circle(TouchElementId::DLeft, dX - dSp, dY, 0.036f * H, BTN_DLEFT, "<");
+        circle(TouchElementId::DRight, dX + dSp, dY, 0.036f * H, BTN_DRIGHT, ">");
+    }
+
     if (edge) {
         pill(TouchElementId::Z, 0.070f * W + sl, 0.085f * H + st, 0.052f * W, 0.042f * H, BTN_Z, "Z");
         pill(TouchElementId::L, 0.158f * W + sl, 0.085f * H + st, 0.026f * W, 0.032f * H, BTN_L, "L");
@@ -539,12 +552,15 @@ void TouchControlOverlay::Draw() {
     static float sLastScale = -1.0f;
     static int sLastEdge = -1;
     auto cv = Context::GetInstance()->GetConsoleVariables();
+    static int sLastDpad = -1;
     const float scaleNow = cv->GetFloat("gTouch.Scale", 1.0f);
     const int edgeNow = cv->GetInteger("gTouch.EdgeLayout", 0);
+    const int dpadNow = cv->GetInteger("gTouch.ShowDpad", 0);
     if (displaySize.x != mDisplaySize.x || displaySize.y != mDisplaySize.y || mElements.empty() ||
-        scaleNow != sLastScale || edgeNow != sLastEdge) {
+        scaleNow != sLastScale || edgeNow != sLastEdge || dpadNow != sLastDpad) {
         sLastScale = scaleNow;
         sLastEdge = edgeNow;
+        sLastDpad = dpadNow;
         RebuildLayout(displaySize);
     }
 
