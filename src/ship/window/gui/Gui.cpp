@@ -9,6 +9,7 @@
 
 #include "ship/config/Config.h"
 #include "ship/Context.h"
+#include "ship/touch/TouchControlOverlay.h" // ApplyTouchScroll, called from StartFrame
 #include <imgui_internal.h> // ImGuiViewportP (WorkInsetMin/Max, UpdateWorkRect)
 #include <algorithm>
 #include <cmath>
