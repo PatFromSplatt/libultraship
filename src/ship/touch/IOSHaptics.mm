@@ -11,10 +11,6 @@
 // CoreHaptics needs no entitlement, and every supported device (iPhone 8+) has the hardware;
 // where it is absent (iPads) every call degrades to a silent no-op.
 
-static UIImpactFeedbackGenerator* sTapLight = nil;
-static UIImpactFeedbackGenerator* sTapMedium = nil;
-static UIImpactFeedbackGenerator* sTapRigid = nil;
-
 static CHHapticEngine* sEngine = nil;
 static id<CHHapticPatternPlayer> sRumblePlayer = nil;
 static float sRumbleIntensity = -1.0f; // player must be rebuilt when this changes
@@ -46,22 +42,36 @@ static bool EnsureEngine(void) {
     return false;
 }
 
+// 0 = light (buttons, pills), 1 = medium (stick spawn), 2 = rigid (ocarina notes).
+// Function-local statics rather than pointer-to-pointer juggling: ARC refuses a
+// UIImpactFeedbackGenerator** without explicit ownership qualifiers.
+static UIImpactFeedbackGenerator* TapGenerator(int kind) {
+    static UIImpactFeedbackGenerator* sLight = nil;
+    static UIImpactFeedbackGenerator* sMedium = nil;
+    static UIImpactFeedbackGenerator* sRigid = nil;
+    switch (kind) {
+        case 1:
+            if (sMedium == nil) {
+                sMedium = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+            }
+            return sMedium;
+        case 2:
+            if (sRigid == nil) {
+                sRigid = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleRigid];
+            }
+            return sRigid;
+        default:
+            if (sLight == nil) {
+                sLight = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+            }
+            return sLight;
+    }
+}
+
 extern "C" void IOSHapticsTap(int kind) {
-    // 0 = light (buttons, pills), 1 = medium (stick spawn), 2 = rigid (ocarina notes).
-    UIImpactFeedbackGenerator** gen = &sTapLight;
-    UIImpactFeedbackStyle style = UIImpactFeedbackStyleLight;
-    if (kind == 1) {
-        gen = &sTapMedium;
-        style = UIImpactFeedbackStyleMedium;
-    } else if (kind == 2) {
-        gen = &sTapRigid;
-        style = UIImpactFeedbackStyleRigid;
-    }
-    if (*gen == nil) {
-        *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
-    }
-    [*gen impactOccurred];
-    [*gen prepare]; // keep the Taptic Engine warm for the next press
+    UIImpactFeedbackGenerator* gen = TapGenerator(kind);
+    [gen impactOccurred];
+    [gen prepare]; // keep the Taptic Engine warm for the next press
 }
 
 extern "C" void IOSHapticsRumbleStart(float intensity) {
