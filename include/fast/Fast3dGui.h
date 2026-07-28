@@ -66,6 +66,15 @@ class Fast3dGui : public Ship::Gui {
     bool SupportsViewports() override;
 
     /**
+     * @brief Pixels-per-point for the 3D scene render target (1.0f except on iOS).
+     *
+     * ImGui lays out in points and rasterizes at DisplayFramebufferScale; the scene is a real
+     * render target, so it must be sized in native pixels or the game renders at a fraction of
+     * the display resolution and is upscaled.
+     */
+    float GetNativePixelScale() override;
+
+    /**
      * @brief Initialises the ImGui context with the given backend-specific handles.
      * @param windowImpl Backend-specific handles required by the ImGui backend.
      */

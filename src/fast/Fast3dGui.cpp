@@ -1,4 +1,6 @@
 #include "fast/Fast3dGui.h"
+#include "ship/touch/TouchControlOverlay.h"
+#include <algorithm>
 
 #include "fast/Fast3dWindow.h"
 #include "ship/Context.h"
@@ -45,8 +47,59 @@ Fast3dGui::Fast3dGui() : Ship::Gui() {
 Fast3dGui::Fast3dGui(std::vector<std::shared_ptr<Ship::GuiWindow>> guiWindows) : Ship::Gui(guiWindows) {
 }
 
+float Fast3dGui::GetNativePixelScale() {
+#ifdef __IOS__
+    // The GUI layer works entirely in UIKit POINTS: io.DisplaySize, touch hit-testing, the
+    // touch overlay layout and safe-area insets. The 3D scene framebuffer is NOT part of that -
+    // it is a real render target, so sizing it from GetContentRegionAvail() (points) renders
+    // the game at 1/3 linear (1/9 pixels) and upscales it at composite time.
+    if (!Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gSettings.NativeResolution", 1)) {
+        return 1.0f;
+    }
+    if (mImpl.Backend != WindowBackend::FAST3D_SDL_METAL) {
+        return 1.0f;
+    }
+
+    float scale = 0.0f;
+    if (mImpl.Metal.Renderer != nullptr && mImpl.Metal.Window != nullptr) {
+        int pixelWidth = 0, pixelHeight = 0, pointWidth = 0, pointHeight = 0;
+        SDL_GetRendererOutputSize(static_cast<SDL_Renderer*>(mImpl.Metal.Renderer), &pixelWidth, &pixelHeight);
+        SDL_GetWindowSize(static_cast<SDL_Window*>(mImpl.Metal.Window), &pointWidth, &pointHeight);
+        if (pixelWidth > 0 && pointWidth > 0) {
+            scale = (float)pixelWidth / (float)pointWidth;
+        }
+    }
+    if (scale <= 0.0f && mImGuiIo != nullptr) {
+        scale = mImGuiIo->DisplayFramebufferScale.x;
+    }
+    if (!(scale >= 1.0f)) { // also catches NaN and a failed query
+        scale = 1.0f;
+    }
+    return std::min(scale, 4.0f);
+#else
+    return 1.0f;
+#endif
+}
+
 void Fast3dGui::Init(GuiWindowInitData windowImpl) {
     mImpl = windowImpl;
+#ifdef __IOS__
+    // Latch the font raster scale BEFORE Gui::Init() loads any font, and query SDL rather than
+    // ImGui's DisplayFramebufferScale (which the SDL2 backend only populates per-frame and
+    // would still read 1.0 here, silently disabling crisp fonts). Deliberately not
+    // GetNativePixelScale(), whose CVar/backend early-outs are right for the 3D target and
+    // wrong for fonts.
+    if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gSettings.CrispFonts", 1) &&
+        mImpl.Backend == WindowBackend::FAST3D_SDL_METAL && mImpl.Metal.Renderer != nullptr &&
+        mImpl.Metal.Window != nullptr) {
+        int pixelWidth = 0, pixelHeight = 0, pointWidth = 0, pointHeight = 0;
+        SDL_GetRendererOutputSize(static_cast<SDL_Renderer*>(mImpl.Metal.Renderer), &pixelWidth, &pixelHeight);
+        SDL_GetWindowSize(static_cast<SDL_Window*>(mImpl.Metal.Window), &pointWidth, &pointHeight);
+        if (pixelWidth > 0 && pointWidth > 0) {
+            mFontRasterScale = std::clamp((float)pixelWidth / (float)pointWidth, 1.0f, 3.0f);
+        }
+    }
+#endif
     Gui::Init();
 }
 
@@ -100,7 +153,15 @@ void Fast3dGui::ImGuiWMInit() {
             if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_ALLOW_BACKGROUND_INPUTS, 1)) {
                 SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
             }
+#ifdef __IOS__
+            // iOS: SDL_GL_GetDrawableSize falls back to window POINTS for Metal views (UIKit
+            // only reports backing pixels for GL views), leaving ImGui's DisplayFramebufferScale
+            // at 1.0 while the drawable is @3x - the Metal size guard then rejects every frame
+            // (black screen). Passing the renderer makes the backend measure true pixels.
+            ImGui_ImplSDL2_InitForSDLRenderer(static_cast<SDL_Window*>(mImpl.Metal.Window), mImpl.Metal.Renderer);
+#else
             ImGui_ImplSDL2_InitForMetal(static_cast<SDL_Window*>(mImpl.Metal.Window));
+#endif
             break;
 #endif
 #if defined(ENABLE_DX11) || defined(ENABLE_DX12)
@@ -320,8 +381,15 @@ void Fast3dGui::CalculateGameViewport() {
     mainPos.y -= mTemporaryWindowPos.y;
     ImVec2 size = ImGui::GetContentRegionAvail();
     const auto interpreter = mInterpreter.lock().get();
-    interpreter->mCurDimensions.width = (uint32_t)(size.x * mInterpreter.lock()->mCurDimensions.internal_mul);
-    interpreter->mCurDimensions.height = (uint32_t)(size.y * mInterpreter.lock()->mCurDimensions.internal_mul);
+    // `size` is in ImGui POINTS. mCurDimensions is the 3D scene RENDER TARGET and must be in
+    // native pixels; on iOS the two differ by the display scale. Everything below deliberately
+    // stays in points: mGameWindowViewport, the ImGui::Image quad, the touch overlay and the
+    // safe-area insets. nativeScale is exactly 1.0f off iOS, so this is a no-op on desktop.
+    const float nativeScale = GetNativePixelScale();
+    interpreter->mCurDimensions.width =
+        (uint32_t)(size.x * nativeScale * interpreter->mCurDimensions.internal_mul);
+    interpreter->mCurDimensions.height =
+        (uint32_t)(size.y * nativeScale * interpreter->mCurDimensions.internal_mul);
     interpreter->mGameWindowViewport.x = (int16_t)mainPos.x;
     interpreter->mGameWindowViewport.y = (int16_t)mainPos.y;
     interpreter->mGameWindowViewport.width = (int16_t)size.x;
@@ -372,6 +440,7 @@ void Fast3dGui::DrawGame() {
     ImGui::PopStyleColor();
 
     GetGameOverlay()->Draw();
+    Ship::TouchControlOverlay::Instance().Draw();
 
     ImVec2 mainPos = ImGui::GetWindowPos();
     ImVec2 size = ImGui::GetContentRegionAvail();
@@ -439,8 +508,18 @@ void Fast3dGui::ApplyResolutionChanges() {
 
     constexpr uint32_t minResolutionWidth = 320;
     constexpr uint32_t minResolutionHeight = 240;
-    constexpr uint32_t maxResolutionWidth = 8096;  // the renderer's actual limit is 16384
-    constexpr uint32_t maxResolutionHeight = 4320; // on either axis. if you have the VRAM for it.
+    // These caps are point-space upstream. On iOS mCurDimensions is in native pixels, so scale
+    // them or a native-width base clips and silently distorts the aspect ratio. Hard ceiling is
+    // the renderer's 16384 limit.
+    const float resolutionScale = GetNativePixelScale();
+    uint32_t maxResolutionWidth = (uint32_t)(8096.0f * resolutionScale);
+    uint32_t maxResolutionHeight = (uint32_t)(4320.0f * resolutionScale); // on either axis, VRAM permitting
+    if (maxResolutionWidth > 16384) {
+        maxResolutionWidth = 16384;
+    }
+    if (maxResolutionHeight > 16384) {
+        maxResolutionHeight = 16384;
+    }
     uint32_t newWidth;
     uint32_t newHeight;
     const auto interpreter = mInterpreter.lock().get();
@@ -485,6 +564,12 @@ void Fast3dGui::ApplyResolutionChanges() {
 
 int16_t Fast3dGui::GetIntegerScaleFactor() {
     const auto interpreter = mInterpreter.lock().get();
+    // mGameWindowViewport is in POINTS; mCurDimensions is the scene target in native PIXELS
+    // (identical spaces off iOS). Integer scaling is a point-space concept, so bring the scene
+    // dimensions back into points before dividing, or every quotient truncates to 0.
+    const float nativeScale = GetNativePixelScale();
+    const uint32_t curWidth = std::max(1u, (uint32_t)(interpreter->mCurDimensions.width / nativeScale));
+    const uint32_t curHeight = std::max(1u, (uint32_t)(interpreter->mCurDimensions.height / nativeScale));
     if (!Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(
             CVAR_PREFIX_ADVANCED_RESOLUTION ".IntegerScale.FitAutomatically", 0)) {
         int16_t factor = Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(
@@ -493,13 +578,13 @@ int16_t Fast3dGui::GetIntegerScaleFactor() {
         if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(
                 CVAR_PREFIX_ADVANCED_RESOLUTION ".IntegerScale.NeverExceedBounds", 1)) {
             if (((float)interpreter->mGameWindowViewport.height / interpreter->mGameWindowViewport.width) <
-                ((float)interpreter->mCurDimensions.height / interpreter->mCurDimensions.width)) {
-                if ((uint32_t)factor > interpreter->mGameWindowViewport.height / interpreter->mCurDimensions.height) {
-                    factor = interpreter->mGameWindowViewport.height / interpreter->mCurDimensions.height;
+                ((float)curHeight / curWidth)) {
+                if ((uint32_t)factor > interpreter->mGameWindowViewport.height / curHeight) {
+                    factor = interpreter->mGameWindowViewport.height / curHeight;
                 }
             } else {
-                if ((uint32_t)factor > interpreter->mGameWindowViewport.width / interpreter->mCurDimensions.width) {
-                    factor = interpreter->mGameWindowViewport.width / interpreter->mCurDimensions.width;
+                if ((uint32_t)factor > interpreter->mGameWindowViewport.width / curWidth) {
+                    factor = interpreter->mGameWindowViewport.width / curWidth;
                 }
             }
         }
@@ -512,10 +597,10 @@ int16_t Fast3dGui::GetIntegerScaleFactor() {
         int16_t factor = 1;
 
         if (((float)interpreter->mGameWindowViewport.height / interpreter->mGameWindowViewport.width) <
-            ((float)interpreter->mCurDimensions.height / interpreter->mCurDimensions.width)) {
-            factor = interpreter->mGameWindowViewport.height / interpreter->mCurDimensions.height;
+            ((float)curHeight / curWidth)) {
+            factor = interpreter->mGameWindowViewport.height / curHeight;
         } else {
-            factor = interpreter->mGameWindowViewport.width / interpreter->mCurDimensions.width;
+            factor = interpreter->mGameWindowViewport.width / curWidth;
         }
 
         factor += Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(
