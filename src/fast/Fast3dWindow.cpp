@@ -16,6 +16,7 @@
 #include "fast/Fast3dGui.h"
 
 #include <fstream>
+#include <stdexcept>
 
 namespace Fast {
 
@@ -36,7 +37,12 @@ Fast3dWindow::Fast3dWindow(std::shared_ptr<Ship::Gui> gui, std::shared_ptr<FastM
         AddAvailableWindowBackend(WindowBackend::FAST3D_SDL_METAL);
     }
 #endif
+#ifdef ENABLE_OPENGL
+    // Only advertise backends this build can actually instantiate: advertising OpenGL on builds
+    // without it lets a config value select a backend InitWindowManager cannot create, which
+    // boots into a null-renderer crash (and offers a broken option in the renderer menu).
     AddAvailableWindowBackend(WindowBackend::FAST3D_SDL_OPENGL);
+#endif
 }
 
 Fast3dWindow::Fast3dWindow(std::shared_ptr<Ship::Gui> gui)
@@ -101,6 +107,11 @@ void Fast3dWindow::Init() {
         Ship::Context::GetRawInstance()->GetConfig()->GetInt("Shortcuts.MouseCapture", Ship::KbScancode::LUS_KB_F2));
 
     InitWindowManager();
+    if (mWindowManagerApi == nullptr || mRenderingApi == nullptr) {
+        SPDLOG_CRITICAL("No rendering backend could be created (Window.Backend.Id={}); cannot continue",
+                        Ship::Context::GetRawInstance()->GetConfig()->GetInt("Window.Backend.Id", -1));
+        throw std::runtime_error("Fast3dWindow::Init: no usable rendering backend for this platform/config");
+    }
     mGfxDebugger = std::make_shared<GfxDebugger>();
     mInterpreter->SetGfxDebugger(mGfxDebugger);
     mInterpreter->Init(mWindowManagerApi, mRenderingApi, Ship::Context::GetRawInstance()->GetName().c_str(),
@@ -156,7 +167,25 @@ void Fast3dWindow::InitWindowManager() {
             break;
 #endif
         default:
-            SPDLOG_ERROR("Could not load the correct rendering backend");
+            // A config can carry a backend id this build cannot instantiate (e.g. copied from
+            // another platform, or selected before a backend was removed). Fall back to a
+            // compiled-in backend and persist the corrected choice instead of leaving the
+            // renderer pointers null.
+            SPDLOG_ERROR("Window backend {} is not available in this build; falling back to default backend",
+                         static_cast<int>(GetWindowBackend()));
+#ifdef __APPLE__
+            if (Metal_IsSupported()) {
+                SetWindowBackend(WindowBackend::FAST3D_SDL_METAL);
+                mRenderingApi = new GfxRenderingAPIMetal();
+                mWindowManagerApi = new GfxWindowBackendSDL2();
+                break;
+            }
+#endif
+#ifdef ENABLE_OPENGL
+            SetWindowBackend(WindowBackend::FAST3D_SDL_OPENGL);
+            mRenderingApi = new GfxRenderingAPIOGL();
+            mWindowManagerApi = new GfxWindowBackendSDL2();
+#endif
             break;
     }
 }
