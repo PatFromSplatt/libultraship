@@ -56,6 +56,8 @@
 LONG_PTR SDL_WndProc;
 #endif
 
+extern "C" void IOSAudioSessionReactivate(void); // ship/utils/IOSAudioSession.mm
+
 namespace Fast {
 const SDL_Scancode lus_to_sdl_table[] = {
     SDL_SCANCODE_UNKNOWN,
@@ -363,6 +365,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
                 case SDL_APP_WILLENTERFOREGROUND:
                 case SDL_APP_DIDENTERFOREGROUND:
                     Ship::Mobile::SetAppBackgrounded(false);
+#ifdef __IOS__
+                    // A call/Siri/alarm can steal the audio session for good; take it back.
+                    IOSAudioSessionReactivate();
+#endif
                     break;
                 default:
                     break;
