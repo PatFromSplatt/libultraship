@@ -121,9 +121,10 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
 endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    find_library(COREMOTION CoreMotion) # gyro aiming
-    find_library(UIKIT UIKit)           # safe-area insets
-    target_link_libraries(libultraship PRIVATE ${COREMOTION} ${UIKIT})
+    find_library(COREMOTION CoreMotion)   # gyro aiming
+    find_library(COREHAPTICS CoreHaptics) # touch haptics + Rumble Pak on the Taptic Engine
+    find_library(UIKIT UIKit)             # safe-area insets
+    target_link_libraries(libultraship PRIVATE ${COREMOTION} ${COREHAPTICS} ${UIKIT})
 endif()
 
 if (USE_OPENGLES)

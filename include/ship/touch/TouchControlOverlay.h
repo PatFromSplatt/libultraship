@@ -51,6 +51,9 @@ class TouchControlOverlay {
     void Draw();             // call once per frame from Gui::DrawGame
     void ApplyTouchScroll(); // call once per frame from Gui::StartFrame, right after NewFrame()
     void SetPhysicalControllerConnected(bool connected);
+    bool IsPhysicalControllerConnected() const {
+        return mPhysicalControllerConnected;
+    }
     bool IsOcarinaLayout() const {
         return mOcarinaLayout;
     }
@@ -91,7 +94,9 @@ class TouchControlOverlay {
 
     bool mOcarinaLayout = false;
     bool mHidden = false;
-    bool mAutoHidden = false; // physical controller connected
+    bool mAutoHidden = false;                  // overlay hidden because a controller attached
+    bool mPhysicalControllerConnected = false; // tracked separately: rumble routing needs the
+                                               // raw fact even if hiding behaviour changes
     ImVec2 mDisplaySize{};
     float mSafeLeft = 0.0f, mSafeRight = 0.0f, mSafeTop = 0.0f, mSafeBottom = 0.0f;
 };
