@@ -1,6 +1,6 @@
 #include "ship/audio/Audio.h"
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(__IOS__)
 #include "ship/audio/CoreAudioAudioPlayer.h"
 #endif
 
@@ -21,7 +21,7 @@ void Audio::InitAudioPlayer() {
             mAudioPlayer = std::make_shared<WasapiAudioPlayer>(this->mAudioSettings);
             break;
 #endif
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(__IOS__)
         case AudioBackend::COREAUDIO:
             mAudioPlayer = std::make_shared<CoreAudioAudioPlayer>(this->mAudioSettings);
             break;
@@ -48,7 +48,7 @@ void Audio::Init() {
 #ifdef _WIN32
     mAvailableAudioBackends->push_back(AudioBackend::WASAPI);
 #endif
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(__IOS__)
     mAvailableAudioBackends->push_back(AudioBackend::COREAUDIO);
 #endif
     mAvailableAudioBackends->push_back(AudioBackend::SDL);
@@ -79,9 +79,11 @@ AudioBackend Audio::GetSavedAudioBackend() {
         return AudioBackend::SDL;
     }
 
+#if defined(__APPLE__) && !defined(__IOS__)
     if (backendName == "coreaudio") {
         return AudioBackend::COREAUDIO;
     }
+#endif
 
     if (backendName == "sdl") {
         return AudioBackend::SDL;
@@ -97,7 +99,7 @@ AudioBackend Audio::GetSavedAudioBackend() {
     return AudioBackend::WASAPI;
 #endif
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(__IOS__)
     return AudioBackend::COREAUDIO;
 #endif
 
