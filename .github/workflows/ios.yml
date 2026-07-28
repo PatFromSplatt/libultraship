@@ -1,0 +1,52 @@
+name: ios
+
+# Compile gate for the iOS platform layer. libultraship builds standalone, so this proves the
+# engine forward-port on its own — before any game is in the picture.
+on:
+  push:
+    branches: [ios, ios-lus-c57da1b4]
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    branches: [ios-lus-c57da1b4]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: brew install ninja
+      - name: Configure ccache
+        uses: hendrikmuhs/ccache-action@v1.2.22
+        with:
+          key: lus-ios
+          max-size: "1G"
+          evict-old-files: job
+      - name: Configure (iphoneos arm64, Metal-only)
+        env:
+          CCACHE_SLOPPINESS: pch_defines,time_macros
+        run: |
+          cmake --no-warn-unused-cli -H. -Bbuild-ios -GNinja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
+            -DPLATFORM=OS64 \
+            -DDEPLOYMENT_TARGET=16.0 \
+            -DCMAKE_BUILD_TYPE:STRING=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
+            -DENABLE_SCRIPTING=OFF \
+            -DDISABLE_DLL_LOADER=ON
+      - name: Build libultraship
+        env:
+          CCACHE_SLOPPINESS: pch_defines,time_macros
+        run: cmake --build build-ios --target libultraship -j3
