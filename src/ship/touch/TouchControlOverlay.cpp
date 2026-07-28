@@ -483,13 +483,16 @@ void TouchControlOverlay::Draw() {
     auto& state = TouchControllerState::Instance();
 
 #ifdef __IOS__
-    // Track the CVar the GAME reads (z_player.c Ship_HandleFirstPersonAiming). Driving a
-    // separate gTouch.* toggle span up CoreMotion for a field nothing consumed — which is why
-    // gyro appeared completely dead.
+    // Track the CVar the GAME reads, not a private gTouch one: spinning up CoreMotion for a
+    // field nothing consumes is exactly why gyro appeared completely dead. The two games differ
+    // -- Majora's Mask gates first-person gyro behind an enhancement CVar, while Ocarina of Time
+    // consumes pad gyro ungated (z_player.c, `fabsf(gyro_x) > 0.01f`) and so needs a toggle of
+    // its own or it can never be turned off. Honour either, so one engine serves both.
     static bool sGyroWasEnabled = false;
     static float sGyroLastSensitivity = -1.0f;
     auto cvars = Context::GetRawInstance()->GetConsoleVariables();
-    const bool gyroEnabled = cvars->GetInteger("gEnhancements.Camera.FirstPerson.GyroEnabled", 0) != 0;
+    const bool gyroEnabled = cvars->GetInteger("gEnhancements.Camera.FirstPerson.GyroEnabled", 0) != 0 ||
+                             cvars->GetInteger("gTouch.GyroEnabled", 0) != 0;
     const float gyroSensitivity = cvars->GetFloat("gTouch.GyroSensitivity", 1.0f);
     if (gyroEnabled != sGyroWasEnabled) {
         IOSGyroSetEnabled(gyroEnabled, gyroSensitivity);

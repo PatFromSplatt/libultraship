@@ -65,6 +65,14 @@ void Gui::Init() {
     mImGuiIo = &ImGui::GetIO();
     mImGuiIo->ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NoMouseCursorChange;
 
+#if defined(__IOS__) || defined(__ANDROID__)
+    // A finger drag on a window's body must scroll it, not slide the whole window across the
+    // screen. ImGui's default lets a drag anywhere move the window, which reads to a player as
+    // "menus don't scroll" -- and StartMouseMovingWindow would claim the drag before the touch
+    // overlay's scroll pass ever runs. The settings menu was spared only because it sets NoMove.
+    mImGuiIo->ConfigWindowsMoveFromTitleBarOnly = true;
+#endif
+
     // Add Font Awesome and merge it into the default font.
     mImGuiIo->Fonts->AddFontDefault();
     // This must match the default font size, which is 13.0f.
