@@ -69,6 +69,7 @@ endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     list(APPEND Source_Files__Utils ${CMAKE_CURRENT_SOURCE_DIR}/utils/IOSSafeArea.mm)
+    list(APPEND Source_Files__Utils ${CMAKE_CURRENT_SOURCE_DIR}/utils/IOSCertInfo.mm)
 endif()
 
 source_group("utils" FILES ${Source_Files__Utils})
