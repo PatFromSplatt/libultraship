@@ -29,6 +29,11 @@
 
 #include <SDL_render.h>
 #include <imgui_impl_metal.h>
+#ifdef __IOS__
+#include <SDL_timer.h>
+#include <SDL_events.h>
+#include "ship/port/mobile/MobileImpl.h"
+#endif
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/fmt.h>
 
@@ -118,8 +123,17 @@ void GfxRenderingAPIMetal::RenderDrawData(ImDrawData* drawData) {
 
     // Workaround for detecting when transitioning to/from full screen mode.
     MTL::Texture* screen_texture = mTextures[framebuffer.mTextureId].texture;
-    int fb_width = (int)(drawData->DisplaySize.x * drawData->FramebufferScale.x);
-    int fb_height = (int)(drawData->DisplaySize.y * drawData->FramebufferScale.y);
+#ifdef __IOS__
+    // SDL's UIKit backend cannot report drawable pixels for Metal views, so ImGui's
+    // DisplayFramebufferScale stays 1.0 while the drawable is @3x and this guard would reject
+    // every frame (black screen). Derive the true scale from the actual drawable.
+    if (drawData->DisplaySize.x > 0.0f && drawData->DisplaySize.y > 0.0f) {
+        drawData->FramebufferScale.x = (float)screen_texture->width() / drawData->DisplaySize.x;
+        drawData->FramebufferScale.y = (float)screen_texture->height() / drawData->DisplaySize.y;
+    }
+#endif
+    int fb_width = (int)lroundf(drawData->DisplaySize.x * drawData->FramebufferScale.x);
+    int fb_height = (int)lroundf(drawData->DisplaySize.y * drawData->FramebufferScale.y);
     if (screen_texture->width() != fb_width || screen_texture->height() != fb_height)
         return;
 
@@ -689,6 +703,15 @@ int GfxRenderingAPIMetal::CreateFramebuffer() {
 }
 
 void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t height) {
+#ifdef __IOS__
+    // Never acquire drawables while backgrounded: iOS drops background presents, the
+    // CAMetalLayer drawable pool starves, and every later nextDrawable() blocks for its full
+    // 1s timeout — the game visually runs at ~1fps after resume.
+    while (Ship::Mobile::IsAppBackgrounded()) {
+        SDL_PumpEvents();
+        SDL_Delay(50);
+    }
+#endif
     mCurrentDrawable = nullptr;
     mCurrentDrawable = mLayer->nextDrawable();
 

@@ -12,6 +12,10 @@
 
 #include "ship/Context.h"
 #include "ship/config/ConsoleVariable.h"
+#include "ship/touch/TouchControlOverlay.h"
+#if defined(__IOS__) || defined(__ANDROID__)
+#include "ship/port/mobile/MobileImpl.h"
+#endif
 #include "ship/controller/controldeck/ControlDeck.h"
 #include "ship/window/FileDropMgr.h"
 #include "fast/backends/gfx_sdl.h"
@@ -235,7 +239,7 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
         }
     }
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !defined(__IOS__)
     // Implement fullscreening with native macOS APIs
     if (on != isNativeMacOSFullscreenActive(mWnd)) {
         toggleNativeMacOSFullscreen(mWnd);
@@ -281,7 +285,15 @@ void GfxWindowBackendSDL2::GetActiveWindowRefreshRate(uint32_t* refresh_rate) {
     *refresh_rate = mode.refresh_rate != 0 ? mode.refresh_rate : 60;
 }
 
+// SCHEDULED presentation time of the last presented frame. On iOS it advances by exactly one
+// frame interval per presented frame, so lateness accumulates as real debt that IsFrameReady()
+// repays by dropping interpolated frames.
 static uint64_t previous_time;
+#ifdef __IOS__
+#define MAX_FRAME_DEBT_100NS 1000000        // 100ms: a stall, not slowness — re-base instead
+#define MAX_CONSECUTIVE_DROPPED_FRAMES 4    // floor so the screen can never go blank
+static uint32_t consecutive_dropped_frames;
+#endif
 #ifdef _WIN32
 static HANDLE mTimer;
 #endif
@@ -327,7 +339,38 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
     SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
 #endif
 
+#ifdef __IOS__
+    // Handheld quality-of-life, set before video init: keep the screen awake, defer the
+    // home-indicator gesture so bottom-edge touch controls don't exit the app, and play audio
+    // even when the hardware silent switch is on (this is a game, not an ambient app).
+    SDL_SetHint(SDL_HINT_IDLE_TIMER_DISABLED, "1");
+    SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
+    SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "playback");
+#endif
+
     SDL_Init(SDL_INIT_VIDEO);
+
+#if defined(__IOS__) || defined(__ANDROID__)
+    // SDL_APP_* lifecycle events arrive synchronously from the OS callback on mobile, so an
+    // event watch is the only reliable way to see them in time.
+    SDL_AddEventWatch(
+        [](void* userdata, SDL_Event* event) -> int {
+            switch (event->type) {
+                case SDL_APP_WILLENTERBACKGROUND:
+                case SDL_APP_DIDENTERBACKGROUND:
+                    Ship::Mobile::SetAppBackgrounded(true);
+                    break;
+                case SDL_APP_WILLENTERFOREGROUND:
+                case SDL_APP_DIDENTERFOREGROUND:
+                    Ship::Mobile::SetAppBackgrounded(false);
+                    break;
+                default:
+                    break;
+            }
+            return 0;
+        },
+        nullptr);
+#endif
 
     SDL_EventState(SDL_DROPFILE, SDL_ENABLE);
 
@@ -374,7 +417,9 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
     int len = snprintf(title, sizeof(title), "%s (%s)", gameName, gfxApiName);
 
 #ifdef __IOS__
-    Uint32 flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_SHOWN;
+    // ALLOW_HIGHDPI is essential: without it the Metal drawable is created at 1x point scale
+    // and the game renders at 1/9th resolution on a 3x screen.
+    Uint32 flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI;
 #else
     Uint32 flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
 #endif
@@ -426,7 +471,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
         mRenderer = SDL_CreateRenderer(mWnd, -1, flags);
         if (mRenderer == nullptr) {
             SPDLOG_ERROR("Error creating renderer: {}", SDL_GetError());
-            return;
+            // Continuing without a renderer leaves the Gui/ImGui uninitialized and the app
+            // crashes later in unrelated code; fail fast at the true point of failure.
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Fatal: could not create renderer", SDL_GetError(), mWnd);
+            abort();
         }
 
         if (startFullScreen) {
@@ -625,6 +673,11 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
         case SDL_KEYUP:
             OnKeyup(event.key.keysym.scancode);
             break;
+        case SDL_FINGERDOWN:
+        case SDL_FINGERUP:
+        case SDL_FINGERMOTION:
+            Ship::TouchControlOverlay::Instance().HandleFingerEvent(event.tfinger, event.type);
+            break;
         case SDL_MOUSEBUTTONDOWN:
             OnMouseButtonDown(event.button.button - 1);
             break;
@@ -674,7 +727,7 @@ void GfxWindowBackendSDL2::HandleEvents() {
     }
 
     // resync fullscreen state
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(__IOS__)
     auto nextFullscreenState = isNativeMacOSFullscreenActive(mWnd);
     if (mFullScreen != nextFullscreenState) {
         mFullScreen = nextFullscreenState;
@@ -685,13 +738,50 @@ void GfxWindowBackendSDL2::HandleEvents() {
 #endif
 }
 
-bool GfxWindowBackendSDL2::IsFrameReady() {
-    return true;
-}
-
 static uint64_t qpc_to_100ns(uint64_t qpc) {
     const uint64_t qpc_freq = SDL_GetPerformanceFrequency();
     return qpc / qpc_freq * _100NANOSECONDS_IN_SECOND + qpc % qpc_freq * _100NANOSECONDS_IN_SECOND / qpc_freq;
+}
+
+bool GfxWindowBackendSDL2::IsFrameReady() {
+#ifdef __IOS__
+    // The engine renders ceil(targetFps / 20) interpolated frames per 20Hz logic frame with no
+    // wall-clock term, so if a frame overruns its slot the LOGIC rate falls with it and the game
+    // runs in slow motion. Dropping the render for a slot skips the whole draw path (including
+    // SyncFramerateWithTime's sleep) so the logic frame lands on schedule. Audio is generated
+    // per logic frame, so this repairs the feed rate rather than desyncing it.
+    if (mTargetFps <= 0 ||
+        !Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gSettings.FrameDropCatchUp", 1)) {
+        return true;
+    }
+
+    const uint64_t interval = 10 * FRAME_INTERVAL_US_NUMERATOR / (uint64_t)FRAME_INTERVAL_US_DENOMINATOR;
+    const uint64_t now = qpc_to_100ns(SDL_GetPerformanceCounter());
+
+    if (previous_time == 0 || now < previous_time) {
+        previous_time = now;
+        consecutive_dropped_frames = 0;
+        return true;
+    }
+
+    const uint64_t deadline = previous_time + interval;
+    if (now <= deadline) {
+        consecutive_dropped_frames = 0;
+        return true;
+    }
+
+    if ((now - deadline) > MAX_FRAME_DEBT_100NS || consecutive_dropped_frames >= MAX_CONSECUTIVE_DROPPED_FRAMES) {
+        previous_time = now; // stalled rather than merely slow — forgive the debt
+        consecutive_dropped_frames = 0;
+        return true;
+    }
+
+    previous_time += interval;
+    consecutive_dropped_frames++;
+    return false;
+#else
+    return true;
+#endif
 }
 
 void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
@@ -728,6 +818,16 @@ void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
         t = qpc_to_100ns(SDL_GetPerformanceCounter());
     }
 #endif
+#ifdef __IOS__
+    // Advance the schedule by exactly one interval rather than re-basing to the (possibly late)
+    // wall clock. Re-basing is what made lateness free: the deadline moved with us, so the loop
+    // just ran slow forever instead of dropping a frame. Past MAX_FRAME_DEBT_100NS it is a
+    // stall, not slowness — re-base then.
+    previous_time = (uint64_t)next;
+    if (t > previous_time && (t - previous_time) > MAX_FRAME_DEBT_100NS) {
+        previous_time = t;
+    }
+#else
     if (left > 0 && t - next < 10000) {
         // In case it takes some time for the application to wake up after sleep,
         // or inaccurate mTimer,
@@ -735,6 +835,7 @@ void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
         t = next;
     }
     previous_time = t;
+#endif
 }
 
 void GfxWindowBackendSDL2::SwapBuffersBegin() {
