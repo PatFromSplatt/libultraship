@@ -116,13 +116,13 @@ void GameOverlay::CleanupNotifications() {
 }
 
 float GameOverlay::GetScreenWidth() {
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    return viewport->Size.x;
+    // WorkSize, not Size: on iOS the safe-area insets are published into the work area, so
+    // overlay text stays clear of the Dynamic Island and home indicator. Same on desktop.
+    return ImGui::GetMainViewport()->WorkSize.x;
 }
 
 float GameOverlay::GetScreenHeight() {
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    return viewport->Size.y;
+    return ImGui::GetMainViewport()->WorkSize.y;
 }
 
 float GameOverlay::GetStringWidth(const char* text) {
@@ -140,7 +140,9 @@ ImVec2 GameOverlay::CalculateTextSize(const char* text, const char* textEnd, boo
     }
 
     ImFont* font = mCurrentFont == "Default" ? g.Font : mFonts[mCurrentFont];
-    const float fontSize = font->FontSize;
+    // Measure at the EFFECTIVE displayed size: TextDraw renders through PushFont, which applies
+    // FontGlobalScale, so measuring the raw atlas size mis-sizes every overlay by that factor.
+    const float fontSize = font->FontSize * ImGui::GetIO().FontGlobalScale * font->Scale;
     if (text == textDisplayEnd) {
         return ImVec2(0.0f, fontSize);
     }
@@ -188,8 +190,8 @@ void GameOverlay::DrawSettings() {
 void GameOverlay::Draw() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    ImGui::SetNextWindowPos(viewport->Pos, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(viewport->Size, ImGuiCond_Always);
+    ImGui::SetNextWindowPos(viewport->WorkPos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(viewport->WorkSize, ImGuiCond_Always);
     ImGui::Begin("GameOverlay", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings |
@@ -237,13 +239,10 @@ void GameOverlay::Draw() {
             const float duration = overlay.duration / overlay.fadeTime;
 
             const ImVec4 color = ImVec4(1.0f, 1.0f, 1.0f, duration);
-#ifdef __ANDROID__
-            const float textWidth = GetStringWidth(overlay.Value.c_str()) * 2.0f;
-            const float textOffset = 40.0f * 2.0f;
-#else
+            // The old mobile branch doubled the measured width to mirror a font scale that never
+            // actually applied at runtime, so notifications floated a full text-width off place.
             const float textWidth = GetStringWidth(overlay.Value.c_str());
-            const float textOffset = 40.0f;
-#endif
+            const float textOffset = 40.0f * Context::GetRawInstance()->GetWindow()->GetGui()->GetUiScale();
 
             TextDraw(GetScreenWidth() - textWidth - textOffset, GetScreenHeight() - textOffset - notY, true, color,
                      text);

@@ -10,6 +10,10 @@
 #include "ship/config/Config.h"
 #include "ship/Context.h"
 #include <imgui_internal.h> // ImGuiViewportP (WorkInsetMin/Max, UpdateWorkRect)
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <system_error>
 
 #ifdef __IOS__
 extern "C" void GetIOSSafeAreaInsets(float* top, float* left, float* bottom, float* right);
@@ -64,7 +68,7 @@ void Gui::Init() {
     // Add Font Awesome and merge it into the default font.
     mImGuiIo->Fonts->AddFontDefault();
     // This must match the default font size, which is 13.0f.
-    float baseFontSize = 13.0f;
+    float baseFontSize = 13.0f * mFontRasterScale;
     // FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
     float iconFontSize = baseFontSize * 2.0f / 3.0f;
     static const ImWchar sIconsRanges[] = { ICON_MIN_FA, ICON_MAX_16_FA, 0 };
@@ -75,14 +79,26 @@ void Gui::Init() {
     mImGuiIo->Fonts->AddFontFromMemoryCompressedBase85TTF(fontawesome_compressed_data_base85, iconFontSize,
                                                           &iconsConfig, sIconsRanges);
 
-#if defined(__ANDROID__)
-    // Scale everything by 2 for Android
-    ImGui::GetStyle().ScaleAllSizes(2.0f);
-    mImGuiIo->FontGlobalScale = 2.0f;
-#endif
+    // NOTE: no platform style/font scaling here. The game's ScaleImGui is the single owner of
+    // ImGui style scale and composes Gui::GetUiScale() with the user's setting; scaling here as
+    // well compounded them (and the font assignment was clobbered anyway).
 
     mImGuiIniPath = Context::GetPathRelativeToAppDirectory("imgui.ini");
     mImGuiLogPath = Context::GetPathRelativeToAppDirectory("imgui_log.txt");
+    // imgui.ini stores window pos/size in points. If the UI scale changed since it was written
+    // (including geometry inherited from a desktop install), restored windows can land larger
+    // than the screen or with a title bar above y=0 - undraggable on a touch device.
+    {
+        auto cvars = Context::GetRawInstance()->GetConsoleVariables();
+        const float appliedScale = GetUiScale() * mFontRasterScale;
+        if (std::fabs(cvars->GetFloat("gSettings.LastUiScaleApplied", 0.0f) - appliedScale) > 0.001f) {
+            std::error_code ec;
+            std::filesystem::remove(mImGuiIniPath, ec);
+            cvars->SetFloat("gSettings.LastUiScaleApplied", appliedScale);
+            cvars->Save();
+        }
+    }
+
     mImGuiIo->IniFilename = mImGuiIniPath.c_str();
     mImGuiIo->LogFilename = mImGuiLogPath.c_str();
 
@@ -108,6 +124,30 @@ void Gui::Init() {
 
     ImGuiWMInit();
     ImGuiBackendInit();
+}
+
+float Gui::GetUiScale() {
+    float base = 1.0f;
+#if defined(__ANDROID__) || defined(__IOS__)
+    // UIKit points are already density-normalized, so TEXT needs no magnification; CHROME is
+    // what must grow so a default widget frame reaches the platform minimum touch target:
+    //     bodyFontPt + 2 * authoredFramePaddingY * s >= 44  =>  20 + 16s >= 44  =>  s >= 1.5
+    constexpr float kMinTouchTarget = 44.0f;
+    constexpr float kBodyFontPt = 20.0f;
+    constexpr float kAuthoredFramePadY = 8.0f;
+    base = std::max(1.0f, (kMinTouchTarget - kBodyFontPt) / (2.0f * kAuthoredFramePadY));
+#endif
+    return base * Context::GetRawInstance()->GetConsoleVariables()->GetFloat("gSettings.UIScale", 1.0f);
+}
+
+float Gui::GetFontRasterScale() const {
+    return mFontRasterScale;
+}
+
+float Gui::GetNativePixelScale() {
+    // Base: the scene target and the viewport share a coordinate space. The Fast3D GUI
+    // overrides this on iOS, where the drawable is a multiple of the point size.
+    return 1.0f;
 }
 
 void Gui::ImGuiWMInit() {
@@ -183,7 +223,9 @@ void Gui::DrawMenu() {
     }
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->WorkPos);
+    // The 3D scene is deliberately FULL-BLEED: only chrome respects the safe area, so the game
+    // still reaches the physical edges. Pos, not WorkPos (the size below is the full window).
+    ImGui::SetNextWindowPos(viewport->Pos);
     ImGui::SetNextWindowSize(ImVec2((int)wnd->GetWidth(), (int)wnd->GetHeight()));
     ImGui::SetNextWindowViewport(viewport->ID);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));

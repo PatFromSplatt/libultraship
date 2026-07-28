@@ -138,6 +138,17 @@ class Gui {
      */
     bool GetMenuOrMenubarVisible();
 
+    // Point-space scale for ImGui CHROME on touch platforms (1.0f on desktop). Fonts are
+    // deliberately NOT scaled by this. Derived from the 44pt minimum touch target.
+    float GetUiScale();
+    // Factor the font atlas is rasterized at, latched during Init. ImGui emits geometry in
+    // points and the backend blits at DisplayFramebufferScale, so rasterizing at 1x on a 3x
+    // screen means every glyph is an upscale.
+    float GetFontRasterScale() const;
+    // Pixels-per-point for the 3D scene render target. The base returns 1.0f; the Fast3D GUI
+    // overrides it, because only that layer can see the Metal backend and window handles.
+    virtual float GetNativePixelScale();
+
     /** @brief Returns true if the mouse cursor is currently over any ImGui item. */
     bool IsMouseOverAnyGuiItem();
 
@@ -225,6 +236,7 @@ class Gui {
 
     ImVec2 mTemporaryWindowPos; ///< Scratchpad position used when repositioning windows.
     ImGuiIO* mImGuiIo;          ///< Pointer to the active ImGuiIO context.
+    float mFontRasterScale = 1.0f; ///< Set by the platform GUI during Init, before fonts load.
     std::map<std::string, std::shared_ptr<GuiWindow>> mGuiWindows; ///< Registered window map (name → window).
 
   private:
