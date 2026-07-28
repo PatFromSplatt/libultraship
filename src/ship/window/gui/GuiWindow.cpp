@@ -3,6 +3,8 @@
 #include "ship/config/ConsoleVariable.h"
 #include "ship/window/Window.h"
 #include "ship/window/gui/Gui.h"
+#include <algorithm>
+#include <imgui_internal.h> // ImGuiWindow / FindWindowByName, for the on-screen position clamp
 
 namespace Ship {
 GuiWindow::GuiWindow(const std::string& consoleVariable, bool isVisible, const std::string& name, ImVec2 originalSize,
@@ -71,10 +73,26 @@ void GuiWindow::Draw() { // NOLINT(readability-function-cognitive-complexity)
         // insets are published there in Gui::StartFrame) and constrain resize so an imgui.ini
         // restored from a desktop install, or a user drag, cannot push the window off-screen.
         const ImVec2 work = ImGui::GetMainViewport()->WorkSize;
+        const ImVec2 workPos = ImGui::GetMainViewport()->WorkPos;
         ImGui::SetNextWindowSize(
             ImVec2(std::min(mOriginalSize.x, work.x * 0.95f), std::min(mOriginalSize.y, work.y * 0.95f)),
             ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), work);
+        // Floor the minimum as well as the maximum: a zero minimum lets a stray drag collapse
+        // the window down to WindowMinSize, and on a touch screen there is no handle left big
+        // enough to grab it back.
+        ImGui::SetNextWindowSizeConstraints(ImVec2(std::min(220.0f, work.x), std::min(140.0f, work.y)), work);
+#if defined(__IOS__) || defined(__ANDROID__)
+        // Nothing constrains window POSITION, so a window dragged past the edge is gone for
+        // good -- there is no keyboard and no window list to recover it with.
+        if (ImGuiWindow* w = ImGui::FindWindowByName(mName.c_str())) {
+            const ImVec2 clamped(
+                std::clamp(w->Pos.x, workPos.x, std::max(workPos.x, workPos.x + work.x - w->Size.x)),
+                std::clamp(w->Pos.y, workPos.y, std::max(workPos.y, workPos.y + work.y - w->Size.y)));
+            if (clamped.x != w->Pos.x || clamped.y != w->Pos.y) {
+                ImGui::SetNextWindowPos(clamped);
+            }
+        }
+#endif
     }
     if (!ImGui::Begin(mName.c_str(), &mIsVisible, mWindowFlags)) {
         ImGui::End();

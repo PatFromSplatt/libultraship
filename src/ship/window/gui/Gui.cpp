@@ -111,6 +111,14 @@ void Gui::Init(GuiWindowInitData windowImpl) {
     mImGuiIo = &ImGui::GetIO();
     mImGuiIo->ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NoMouseCursorChange;
 
+#if defined(__IOS__) || defined(__ANDROID__)
+    // A finger drag on a window's body must scroll it, not slide the whole window across the
+    // screen. ImGui's default lets a drag anywhere move the window, which reads to a player as
+    // "menus don't scroll" -- and StartMouseMovingWindow would claim the drag before the touch
+    // overlay's scroll pass ever runs. The settings menu was spared only because it sets NoMove.
+    mImGuiIo->ConfigWindowsMoveFromTitleBarOnly = true;
+#endif
+
 #ifdef __IOS__
     // Latch the font raster scale BEFORE any font is loaded. Deliberately queried from SDL and
     // not from mImGuiIo->DisplayFramebufferScale: that field is populated per-frame by the SDL2
