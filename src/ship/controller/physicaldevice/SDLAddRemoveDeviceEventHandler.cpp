@@ -4,6 +4,7 @@
 #include "ship/controller/controldeck/ControlDeck.h"
 #include "ship/window/Window.h"
 #include "ship/window/gui/Gui.h"
+#include "ship/touch/TouchControlOverlay.h"
 
 namespace Ship {
 
@@ -26,6 +27,7 @@ void SDLAddRemoveDeviceEventHandler::UpdateElement() {
         Context::GetRawInstance()->GetControlDeck()->GetConnectedPhysicalDeviceManager()->HandlePhysicalDeviceConnect(
             event.cdevice.which);
         changed = true;
+        TouchControlOverlay::Instance().SetPhysicalControllerConnected(true);
     }
 
     while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_CONTROLLERDEVICEREMOVED, SDL_CONTROLLERDEVICEREMOVED) > 0) {
@@ -36,6 +38,7 @@ void SDLAddRemoveDeviceEventHandler::UpdateElement() {
             ->GetConnectedPhysicalDeviceManager()
             ->HandlePhysicalDeviceDisconnect(event.cdevice.which);
         changed = true;
+        TouchControlOverlay::Instance().SetPhysicalControllerConnected(false);
     }
 
     // The connected controller set changed, so re-point the ImGui gamepad

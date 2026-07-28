@@ -9,6 +9,11 @@
 
 #include "ship/config/Config.h"
 #include "ship/Context.h"
+#include <imgui_internal.h> // ImGuiViewportP (WorkInsetMin/Max, UpdateWorkRect)
+
+#ifdef __IOS__
+extern "C" void GetIOSSafeAreaInsets(float* top, float* left, float* bottom, float* right);
+#endif
 #include "ship/config/ConsoleVariable.h"
 #include "ship/resource/File.h"
 #include <stb_image.h>
@@ -266,6 +271,18 @@ void Gui::StartFrame() {
     ImGuiBackendNewFrame();
     ImGuiWMNewFrame();
     ImGui::NewFrame();
+#ifdef __IOS__
+    // Publish the UIKit safe-area insets (POINTS — the same space as io.DisplaySize) into the
+    // main viewport work area, AFTER NewFrame() so it survives ImGui's own inset reset. Every
+    // ImGui window that lays out against WorkPos/WorkSize then inherits the Dynamic Island and
+    // home-indicator margins for free. Must be re-applied every frame.
+    float safeTop = 0.0f, safeLeft = 0.0f, safeBottom = 0.0f, safeRight = 0.0f;
+    GetIOSSafeAreaInsets(&safeTop, &safeLeft, &safeBottom, &safeRight);
+    ImGuiViewportP* vp = (ImGuiViewportP*)(void*)ImGui::GetMainViewport();
+    vp->WorkInsetMin = ImVec2(safeLeft, safeTop);
+    vp->WorkInsetMax = ImVec2(safeRight, safeBottom);
+    vp->UpdateWorkRect();
+#endif
 }
 
 void Gui::EndFrame() {

@@ -1,6 +1,7 @@
 #include "libultraship/controller/controldeck/ControlDeck.h"
 
 #include "ship/Context.h"
+#include "ship/touch/TouchControllerState.h"
 #include "libultraship/controller/controldevice/controller/Controller.h"
 #include "libultraship/controller/controldevice/controller/mapping/ControllerDefaultMappings.h"
 #include "ship/utils/StringHelper.h"
@@ -69,6 +70,27 @@ void ControlDeck::WriteToOSContPad(OSContPad* pad) {
         if (controller != nullptr) {
             controller->ReadToPad(&pad[i]);
         }
+    }
+
+    // Merge on-screen touch controls into port 1 (touch and a physical controller can both be
+    // active; OR semantics match how multiple mappings already combine).
+    auto& touch = Ship::TouchControllerState::Instance();
+    pad[0].button |= touch.buttons.load();
+    if (pad[0].stick_x == 0 && pad[0].stick_y == 0) {
+        pad[0].stick_x = touch.stickX.load();
+        pad[0].stick_y = touch.stickY.load();
+    }
+    const float camX = touch.cameraX.load();
+    const float camY = touch.cameraY.load();
+    if (camX != 0.0f || camY != 0.0f) {
+        pad[0].right_stick_x = (int8_t)(camX * 127.0f);
+        pad[0].right_stick_y = (int8_t)(camY * 127.0f);
+    }
+    const float gyroX = touch.gyroX.load();
+    const float gyroY = touch.gyroY.load();
+    if (gyroX != 0.0f || gyroY != 0.0f) {
+        pad[0].gyro_x += gyroX;
+        pad[0].gyro_y += gyroY;
     }
 }
 } // namespace LUS
