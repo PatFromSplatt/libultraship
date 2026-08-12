@@ -20,6 +20,9 @@ GameOverlay::~GameOverlay() {
 
 void GameOverlay::LoadFont(const std::string& name, float fontSize, const ResourceIdentifier& identifier) {
     ImGuiIO& io = ImGui::GetIO();
+    // Rasterize at device pixel density; FontGlobalScale divides by the same factor, so the
+    // displayed size is unchanged but the glyphs are sharp (matches the game-side fonts).
+    fontSize *= Context::GetRawInstance()->GetWindow()->GetGui()->GetFontRasterScale();
     auto initData = std::make_shared<ResourceInitData>();
     initData->Format = RESOURCE_FORMAT_BINARY;
     initData->Type = static_cast<uint32_t>(RESOURCE_TYPE_FONT);
@@ -39,6 +42,7 @@ void GameOverlay::LoadFont(const std::string& name, float fontSize, const Resour
 
 void GameOverlay::LoadFont(const std::string& name, float fontSize, const std::string& path) {
     ImGuiIO& io = ImGui::GetIO();
+    fontSize *= Context::GetRawInstance()->GetWindow()->GetGui()->GetFontRasterScale();
     auto initData = std::make_shared<ResourceInitData>();
     initData->Format = RESOURCE_FORMAT_BINARY;
     initData->Type = static_cast<uint32_t>(RESOURCE_TYPE_FONT);
