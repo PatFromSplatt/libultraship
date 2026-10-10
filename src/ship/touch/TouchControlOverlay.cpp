@@ -7,6 +7,7 @@
 #include "ship/window/gui/Gui.h"
 #include "libultraship/libultra/controller.h"
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 
 namespace Ship {
@@ -30,6 +31,12 @@ extern "C" void IOSGyroSetSensitivity(float sensitivity);
 extern "C" void IOSGyroRefreshOrientation(void);
 extern "C" void IOSHapticsTap(int kind); // IOSHaptics.mm
 #endif
+
+static void AtomicAdd(std::atomic<float>& target, float delta) {
+    float current = target.load();
+    while (!target.compare_exchange_weak(current, current + delta)) {
+    }
+}
 
 TouchControlOverlay& TouchControlOverlay::Instance() {
     static TouchControlOverlay sInstance;
@@ -107,19 +114,6 @@ void TouchControlOverlay::RebuildLayout(ImVec2 displaySize) {
         pill(TouchElementId::NoteCUp, x += step, keyY, hw, hh, BTN_CUP, "^");
     }
 
-    if (!mOcarinaLayout && Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gTouch.ShowDpad", 0)) {
-        // Optional D-pad, off by default: it exists for the D-pad enhancements (item equips,
-        // ArrowCycle, D-pad ocarina), which are physically unpressable by touch without it.
-        // Left-middle, above the floating-stick spawn zone's usual thumb position.
-        const float dX = 0.115f * W + sl;
-        const float dY = 0.40f * H;
-        const float dSp = 0.062f * H * scale;
-        circle(TouchElementId::DUp, dX, dY - dSp, 0.036f * H, BTN_DUP, "^");
-        circle(TouchElementId::DDown, dX, dY + dSp, 0.036f * H, BTN_DDOWN, "v");
-        circle(TouchElementId::DLeft, dX - dSp, dY, 0.036f * H, BTN_DLEFT, "<");
-        circle(TouchElementId::DRight, dX + dSp, dY, 0.036f * H, BTN_DRIGHT, ">");
-    }
-
     if (edge) {
         pill(TouchElementId::Z, 0.070f * W + sl, 0.085f * H + st, 0.052f * W, 0.042f * H, BTN_Z, "Z");
         pill(TouchElementId::L, 0.158f * W + sl, 0.085f * H + st, 0.026f * W, 0.032f * H, BTN_L, "L");
@@ -128,6 +122,30 @@ void TouchControlOverlay::RebuildLayout(ImVec2 displaySize) {
         pill(TouchElementId::Z, 0.09f * W + sl, 0.12f * H + st, 0.055f * W, 0.045f * H, BTN_Z, "Z");
         pill(TouchElementId::L, 0.185f * W + sl, 0.12f * H + st, 0.030f * W, 0.035f * H, BTN_L, "L");
         pill(TouchElementId::R, 0.91f * W - sr, 0.12f * H + st, 0.055f * W, 0.045f * H, BTN_R, "R");
+    }
+
+    mDpadBottom = 0.0f;
+    if (!mOcarinaLayout && Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gTouch.ShowDpad", 0)) {
+        // Optional D-pad, off by default: it exists for the D-pad enhancements (item equips,
+        // ArrowCycle, D-pad ocarina), which are physically unpressable by touch without it.
+        // It sits as high as the Z/L pills allow, and HandleFingerEvent starts the floating-stick
+        // zone below its hit band, so neither leaves a patch of the other inside it.
+        float zlBottom = 0.0f;
+        for (const auto& el : mElements) {
+            if (el.id == TouchElementId::Z || el.id == TouchElementId::L) {
+                zlBottom = std::max(zlBottom, el.center.y + el.halfSize.y * 1.35f);
+            }
+        }
+        const float r = 0.036f * H;
+        const float hitR = r * scale * 1.35f;
+        const float dX = 0.115f * W + sl;
+        const float dSp = 0.062f * H * scale;
+        const float dY = std::max((edge ? 0.27f : 0.30f) * H, zlBottom + dSp + hitR);
+        circle(TouchElementId::DUp, dX, dY - dSp, r, BTN_DUP, "^");
+        circle(TouchElementId::DDown, dX, dY + dSp, r, BTN_DDOWN, "v");
+        circle(TouchElementId::DLeft, dX - dSp, dY, r, BTN_DLEFT, "<");
+        circle(TouchElementId::DRight, dX + dSp, dY, r, BTN_DRIGHT, ">");
+        mDpadBottom = dY + dSp + hitR;
     }
 
     // system pills: small, tucked against the top edge, rarely touched
@@ -192,7 +210,12 @@ void TouchControlOverlay::ComposeButtons() {
             }
         }
     }
-    TouchControllerState::Instance().buttons.store(mask);
+    // Edges are latched so a press and release between two pad reads still reaches the game.
+    auto& state = TouchControllerState::Instance();
+    const uint16_t old = state.buttons.load();
+    state.pressedLatch.fetch_or((uint16_t)(mask & ~old));
+    state.releasedLatch.fetch_or((uint16_t)(old & ~mask));
+    state.buttons.store(mask);
 }
 
 void TouchControlOverlay::HandlePillRelease(TouchElementId id) {
@@ -213,6 +236,9 @@ void TouchControlOverlay::HandlePillRelease(TouchElementId id) {
             break;
         case TouchElementId::Eye:
             mHidden = !mHidden;
+            if (mHidden) {
+                ReleaseAllTouches();
+            }
             break;
         default:
             break;
@@ -220,8 +246,61 @@ void TouchControlOverlay::HandlePillRelease(TouchElementId id) {
 }
 
 void TouchControlOverlay::SetPhysicalControllerConnected(bool connected) {
-    mAutoHidden = connected;
+    // Only an actual change re-decides auto-hide, so a ghost-dot unhide survives a second pad
+    // coming or going.
+    if (connected != mPhysicalControllerConnected) {
+        mAutoHidden = connected;
+        if (connected) {
+            ReleaseAllTouches();
+        }
+    }
     mPhysicalControllerConnected = connected;
+}
+
+// While hidden, finger events never reach the gameplay switch (not even FINGERUP), so anything
+// still held at the moment of hiding must be let go here or it stays pressed until relaunch.
+void TouchControlOverlay::ReleaseAllTouches() {
+    for (auto it = mFingerOwner.begin(); it != mFingerOwner.end();) {
+        if (it->second == TouchElementId::UiWindow) {
+            ++it; // not gameplay input; a window drag keeps scrolling while the controls are hidden
+        } else {
+            it = mFingerOwner.erase(it);
+        }
+    }
+    mStickActive = false;
+    mCameraFinger = -1;
+    auto& state = TouchControllerState::Instance();
+    state.stickX.store(0);
+    state.stickY.store(0);
+    state.camAccumX.store(0.0f);
+    state.camAccumY.store(0.0f);
+    ComposeButtons();
+}
+
+// True when a touch belongs to an ImGui window rather than to gameplay: any modal popup, or an
+// input-accepting window other than the game view under the finger. FindHoveredWindowEx skips
+// windows that are hidden, inactive or NoMouseInputs, so click-through trackers, notifications
+// and tooltips stay gameplay.
+bool TouchControlOverlay::TouchHitsUi(ImVec2 px) {
+    auto gui = Context::GetRawInstance()->GetWindow()->GetGui();
+    if (gui == nullptr || ImGui::GetCurrentContext() == nullptr) {
+        return false;
+    }
+    if (ImGui::GetTopMostPopupModal() != nullptr) {
+        return true;
+    }
+    ImGuiWindow* hovered = nullptr;
+    ImGui::FindHoveredWindowEx(px, true, &hovered, nullptr);
+    if (hovered == nullptr) {
+        return false;
+    }
+    // RootWindow, so "Main - Deck" also covers its DockSpace host child.
+    const ImGuiWindow* root = hovered->RootWindow;
+    if (root->ID == gui->GetMainGameWindowID() || std::strcmp(root->Name, "Main - Deck") == 0) {
+        return false;
+    }
+    auto overlay = gui->GetGameOverlay();
+    return overlay == nullptr || root->ID != overlay->GetID();
 }
 
 void TouchControlOverlay::HandleFingerEvent(const SDL_TouchFingerEvent& finger, uint32_t type) {
@@ -231,6 +310,31 @@ void TouchControlOverlay::HandleFingerEvent(const SDL_TouchFingerEvent& finger, 
     const ImVec2 px(finger.x * mDisplaySize.x, finger.y * mDisplaySize.y);
     auto gui = Context::GetRawInstance()->GetWindow()->GetGui();
     const bool menuOpen = gui != nullptr && gui->GetMenuOrMenubarVisible();
+    const bool hidden = mHidden || mAutoHidden;
+
+    // A finger that landed on a UI window is routed by that owner, never hit-tested again: a scroll
+    // drag leaves the window's rect. Gameplay fingers must never reach HandleMenuScrollFinger,
+    // whose MOTION branch swallows every non-scroll finger and would freeze a held stick.
+    if (type != SDL_FINGERDOWN) {
+        auto owner = mFingerOwner.find(finger.fingerId);
+        if (owner != mFingerOwner.end() && owner->second == TouchElementId::UiWindow) {
+            if (type == SDL_FINGERUP) {
+                mFingerOwner.erase(owner);
+            }
+            HandleMenuScrollFinger(px, finger.fingerId, type);
+            return;
+        }
+    }
+
+    // Menu scroll state means nothing while the menu is closed (unless a UI-window drag owns it). If
+    // the menu closed under a held scroll finger, its FINGERUP never reaches HandleMenuScrollFinger,
+    // and the dead id would block every later menu scroll.
+    if (!menuOpen && mScrollFinger != -1) {
+        auto scrollOwner = mFingerOwner.find(mScrollFinger);
+        if (scrollOwner == mFingerOwner.end() || scrollOwner->second != TouchElementId::UiWindow) {
+            ResetMenuScroll();
+        }
+    }
 
     // Deliberately above the hidden/auto-hidden early return: the overlay hides itself when a
     // physical controller is attached, but the menu is still driven entirely by touch.
@@ -238,9 +342,23 @@ void TouchControlOverlay::HandleFingerEvent(const SDL_TouchFingerEvent& finger, 
         return;
     }
 
-    if (mHidden || mAutoHidden) {
+    // Other ImGui windows (trackers, editors, popups) take the touch instead of gameplay, also
+    // while hidden. Visible overlay buttons and the ghost dot are drawn above every window, so
+    // they keep their own hit area. SDL2 only turns the first finger down into mouse events: with
+    // the stick already held, a second finger on a window gets no ImGui click and its drag is
+    // rejected by ApplyTouchScroll (it latches onto Main Game), which is harmless.
+    if (!menuOpen && type == SDL_FINGERDOWN) {
+        const bool overlayHit = hidden ? IsOnGhostDot(px) : HitTest(px) != nullptr;
+        if (!overlayHit && TouchHitsUi(px)) {
+            mFingerOwner[finger.fingerId] = TouchElementId::UiWindow;
+            HandleMenuScrollFinger(px, finger.fingerId, SDL_FINGERDOWN);
+            return;
+        }
+    }
+
+    if (hidden) {
         // only the ghost dot (bottom-right corner) unhides
-        if (type == SDL_FINGERUP && px.x > mDisplaySize.x * 0.94f && px.y > mDisplaySize.y * 0.88f) {
+        if (type == SDL_FINGERUP && IsOnGhostDot(px)) {
             mHidden = false;
             mAutoHidden = false;
         }
@@ -250,6 +368,7 @@ void TouchControlOverlay::HandleFingerEvent(const SDL_TouchFingerEvent& finger, 
     switch (type) {
         case SDL_FINGERDOWN: {
             TouchElement* el = HitTest(px);
+            const float stickTop = std::max(mDisplaySize.y * 0.30f, mDpadBottom);
             if (el != nullptr) {
                 mFingerOwner[finger.fingerId] = el->id;
                 ComposeButtons();
@@ -260,7 +379,7 @@ void TouchControlOverlay::HandleFingerEvent(const SDL_TouchFingerEvent& finger, 
                     IOSHapticsTap(el->id >= TouchElementId::NoteD ? 2 : 0);
                 }
 #endif
-            } else if (px.x < mDisplaySize.x * 0.40f && px.y > mDisplaySize.y * 0.30f && !mStickActive) {
+            } else if (px.x < mDisplaySize.x * 0.40f && px.y > stickTop && !mStickActive) {
                 // floating stick: base spawns where the finger lands in the left zone
                 mStickActive = true;
                 mFingerOwner[finger.fingerId] = TouchElementId::Stick;
@@ -291,8 +410,9 @@ void TouchControlOverlay::HandleFingerEvent(const SDL_TouchFingerEvent& finger, 
             } else if (it->second == TouchElementId::CameraZone) {
                 const float sens =
                     Context::GetRawInstance()->GetConsoleVariables()->GetFloat("gTouch.CameraSensitivity", 1.0f);
-                mCamAccumX += (px.x - mLastCameraPx.x) / mDisplaySize.x * 6.0f * sens;
-                mCamAccumY += (px.y - mLastCameraPx.y) / mDisplaySize.y * 6.0f * sens;
+                auto& state = TouchControllerState::Instance();
+                AtomicAdd(state.camAccumX, (px.x - mLastCameraPx.x) / mDisplaySize.x * 6.0f * sens);
+                AtomicAdd(state.camAccumY, (px.y - mLastCameraPx.y) / mDisplaySize.y * 6.0f * sens);
                 mLastCameraPx = px;
             }
             break;
@@ -417,6 +537,7 @@ bool TouchControlOverlay::HandleMenuScrollFinger(ImVec2 px, SDL_FingerID id, uin
                 mScrollPastSlop = false;
                 mScrollRejected = false;
                 mScrollWindowId = 0;
+                mScrollDownFrame = ImGui::GetFrameCount();
             }
             return true;
         }
@@ -444,11 +565,7 @@ bool TouchControlOverlay::HandleMenuScrollFinger(ImVec2 px, SDL_FingerID id, uin
                 return false; // fall through so a gear-pill release still fires
             }
             const bool wasTap = !mScrollPastSlop;
-            mScrollFinger = -1;
-            mScrollPastSlop = false;
-            mScrollRejected = false;
-            mScrollWindowId = 0;
-            mScrollAccumX = mScrollAccumY = 0.0f;
+            ResetMenuScroll();
             // A tap while the overlay is hidden must still reach the ghost-dot unhide test.
             return !(wasTap && (mHidden || mAutoHidden));
         }
@@ -457,23 +574,39 @@ bool TouchControlOverlay::HandleMenuScrollFinger(ImVec2 px, SDL_FingerID id, uin
     }
 }
 
-void TouchControlOverlay::ApplyTouchScroll() {
-    const float dx = mScrollAccumX;
-    const float dy = mScrollAccumY;
+void TouchControlOverlay::ResetMenuScroll() {
+    mScrollFinger = -1;
+    mScrollPastSlop = false;
+    mScrollRejected = false;
+    mScrollWindowId = 0;
     mScrollAccumX = mScrollAccumY = 0.0f;
+}
+
+void TouchControlOverlay::ApplyTouchScroll() {
     if (mScrollFinger == -1 || mScrollRejected || !mScrollPastSlop) {
+        mScrollAccumX = mScrollAccumY = 0.0f;
         return;
     }
     ImGuiContext* g = ImGui::GetCurrentContext();
     if (g == nullptr) {
         return;
     }
+    // A flick can deliver the finger down and the slop crossing in one event batch. ImGui's touch
+    // trickling takes the hover position one frame and the button the next, and only then do
+    // widgets set ActiveId and EndFrame set MovingWindow. Until a frame has run with the press, the
+    // checks below would see nothing and ClearActiveID would clear nothing, so keep accumulating.
+    if (mScrollWindowId == 0 && g->FrameCount < mScrollDownFrame + 3) {
+        return;
+    }
+    const float dx = mScrollAccumX;
+    const float dy = mScrollAccumY;
+    mScrollAccumX = mScrollAccumY = 0.0f;
 
     if (mScrollWindowId == 0) {
-        // Latch once, on the first frame past slop. NewFrame() has already computed
-        // HoveredWindow from the touch-as-mouse position SDL synthesised for this same finger,
-        // so it is the window the thumb is genuinely on. Walk up to the innermost ancestor that
-        // actually has scroll range.
+        // Latch once, on the first frame past slop that has seen the press. NewFrame() has already
+        // computed HoveredWindow from the touch-as-mouse position SDL synthesised for this same
+        // finger, so it is the window the thumb is genuinely on. Walk up to the innermost ancestor
+        // that actually has scroll range.
         ImGuiWindow* w = g->HoveredWindow;
         while (w != nullptr && w->ScrollMax.y <= 0.0f && w->ScrollMax.x <= 0.0f &&
                (w->Flags & ImGuiWindowFlags_ChildWindow) != 0) {
@@ -484,10 +617,42 @@ void TouchControlOverlay::ApplyTouchScroll() {
             mScrollRejected = true; // nothing to scroll here; leave the touch alone
             return;
         }
+        // A press on window chrome keeps the whole gesture in ImGui. With
+        // ConfigWindowsMoveFromTitleBarOnly, MovingWindow only survives a title-bar (or dock tab)
+        // press on a window that has one. Do NOT test ActiveId == MoveId: ImGui sets that for every
+        // press on empty window space, which is the normal scroll gesture.
+        const ImGuiWindow* movingRoot = g->MovingWindow != nullptr ? g->MovingWindow->RootWindow : nullptr;
+        if (movingRoot != nullptr &&
+            (!(movingRoot->Flags & ImGuiWindowFlags_NoTitleBar) || movingRoot->DockIsActive)) {
+            mScrollRejected = true;
+            return;
+        }
+        if (g->ActiveId != 0 && g->ActiveIdWindow != nullptr) {
+            // ActiveIdWindow, not w: a scrollbar belongs to the window that owns the bar, and
+            // the resize IDs resolve to the dock host for a docked window.
+            ImGuiWindow* aw = g->ActiveIdWindow;
+            bool chrome = g->ActiveId == ImGui::GetWindowScrollbarID(aw, ImGuiAxis_X) ||
+                          g->ActiveId == ImGui::GetWindowScrollbarID(aw, ImGuiAxis_Y);
+            const bool resizeIdsValid =
+                !aw->DockIsActive || (aw->DockNode != nullptr && aw->DockNode->HostWindow != nullptr);
+            for (int n = 0; n < 4 && !chrome && resizeIdsValid; n++) {
+                chrome = g->ActiveId == ImGui::GetWindowResizeCornerID(aw, n);
+            }
+            for (int d = 0; d < 4 && !chrome && resizeIdsValid; d++) {
+                chrome = g->ActiveId == ImGui::GetWindowResizeBorderID(aw, (ImGuiDir)d);
+            }
+            if (chrome) {
+                mScrollRejected = true;
+                return;
+            }
+        }
         mScrollWindowId = w->ID;
         // Past the slop this is a scroll, not a press: drop any control the press had grabbed
         // so a slider or checkbox under the thumb is not dragged while scrolling.
         ImGui::ClearActiveID();
+        // io.WantTextInput is last NewFrame's verdict; drop it with the active id so the next
+        // HandleEvents does not raise the keyboard for a text field that is no longer active.
+        ImGui::GetIO().WantTextInput = false;
     }
 
     ImGuiWindow* target = ImGui::FindWindowByID(mScrollWindowId);
@@ -534,24 +699,12 @@ void TouchControlOverlay::Draw() {
     }
 #endif
 
-    // drain camera accumulators into per-frame deltas
-    state.cameraX.store(std::clamp(mCamAccumX, -1.0f, 1.0f));
-    state.cameraY.store(std::clamp(mCamAccumY, -1.0f, 1.0f));
-    mCamAccumX = 0.0f;
-    mCamAccumY = 0.0f;
-
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
 
-    if (mHidden || mAutoHidden) {
-        state.buttons.store(0);
-        // ghost dot to unhide
-        dl->AddCircleFilled(ImVec2(displaySize.x * 0.97f, displaySize.y * 0.94f), displaySize.y * 0.018f,
-                            IM_COL32(255, 255, 255, 40));
-        return;
-    }
-
-    // rebuild when the display changes or when a layout-affecting setting is flipped live
+    // Rebuild when the display changes or when a layout-affecting setting is flipped live. Also
+    // while hidden: HandleFingerEvent needs mDisplaySize for the menu-scroll and ghost-dot paths,
+    // and a launch with a controller attached is auto-hidden before the first Draw.
     static float sLastScale = -1.0f;
     static int sLastEdge = -1;
     auto cv = Context::GetRawInstance()->GetConsoleVariables();
@@ -559,12 +712,25 @@ void TouchControlOverlay::Draw() {
     const float scaleNow = cv->GetFloat("gTouch.Scale", 1.0f);
     const int edgeNow = cv->GetInteger("gTouch.EdgeLayout", 0);
     const int dpadNow = cv->GetInteger("gTouch.ShowDpad", 0);
-    if (displaySize.x != mDisplaySize.x || displaySize.y != mDisplaySize.y || mElements.empty() ||
-        scaleNow != sLastScale || edgeNow != sLastEdge || dpadNow != sLastDpad) {
+    if (displaySize.x > 0.0f && displaySize.y > 0.0f &&
+        (displaySize.x != mDisplaySize.x || displaySize.y != mDisplaySize.y || mElements.empty() ||
+         scaleNow != sLastScale || edgeNow != sLastEdge || dpadNow != sLastDpad)) {
         sLastScale = scaleNow;
         sLastEdge = edgeNow;
         sLastDpad = dpadNow;
         RebuildLayout(displaySize);
+    }
+
+    if (mHidden || mAutoHidden) {
+        state.buttons.store(0);
+        state.pressedLatch.store(0);
+        state.releasedLatch.store(0);
+        state.stickX.store(0);
+        state.stickY.store(0);
+        // ghost dot to unhide
+        dl->AddCircleFilled(ImVec2(displaySize.x * 0.97f, displaySize.y * 0.94f), displaySize.y * 0.018f,
+                            IM_COL32(255, 255, 255, 40));
+        return;
     }
 
     const float opacity = Context::GetRawInstance()->GetConsoleVariables()->GetFloat("gTouch.Opacity", 0.35f);

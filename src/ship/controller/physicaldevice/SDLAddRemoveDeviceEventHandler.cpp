@@ -27,7 +27,6 @@ void SDLAddRemoveDeviceEventHandler::UpdateElement() {
         Context::GetRawInstance()->GetControlDeck()->GetConnectedPhysicalDeviceManager()->HandlePhysicalDeviceConnect(
             event.cdevice.which);
         changed = true;
-        TouchControlOverlay::Instance().SetPhysicalControllerConnected(true);
     }
 
     while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_CONTROLLERDEVICEREMOVED, SDL_CONTROLLERDEVICEREMOVED) > 0) {
@@ -38,12 +37,20 @@ void SDLAddRemoveDeviceEventHandler::UpdateElement() {
             ->GetConnectedPhysicalDeviceManager()
             ->HandlePhysicalDeviceDisconnect(event.cdevice.which);
         changed = true;
-        TouchControlOverlay::Instance().SetPhysicalControllerConnected(false);
     }
 
-    // The connected controller set changed, so re-point the ImGui gamepad
-    // backend at it (keeps menu navigation working across hotplug).
     if (changed) {
+        // Decided from the connected set after both loops, not from the last event: removing one
+        // of two pads must not bring the touch controls back or move rumble to the phone.
+        const bool anyGamepad = !Context::GetRawInstance()
+                                     ->GetControlDeck()
+                                     ->GetConnectedPhysicalDeviceManager()
+                                     ->GetConnectedSDLGamepadNames()
+                                     .empty();
+        TouchControlOverlay::Instance().SetPhysicalControllerConnected(anyGamepad);
+
+        // The connected controller set changed, so re-point the ImGui gamepad
+        // backend at it (keeps menu navigation working across hotplug).
         auto window = Context::GetRawInstance()->GetWindow();
         if (window != nullptr && window->GetGui() != nullptr) {
             window->GetGui()->RefreshImGuiGamepads();

@@ -6,6 +6,7 @@
 #include "libultraship/controller/controldevice/controller/mapping/ControllerDefaultMappings.h"
 #include "ship/utils/StringHelper.h"
 #include <imgui.h>
+#include <algorithm>
 #include "ship/controller/controldevice/controller/mapping/mouse/WheelHandler.h"
 
 namespace LUS {
@@ -58,7 +59,22 @@ void ControlDeck::WriteToOSContPad(OSContPad* pad) {
     SDL_PumpEvents();
     Ship::WheelHandler::GetInstance()->Update();
 
+    // Touch camera drag and button edges are consumed by every read, blocked or not, so input
+    // gathered while blocked can never land later as one jump or a replayed press.
+    auto& touch = Ship::TouchControllerState::Instance();
+    const float touchCamX = touch.camAccumX.exchange(0.0f);
+    const float touchCamY = touch.camAccumY.exchange(0.0f);
+    const uint16_t touchHeld = touch.buttons.load();
+    const uint16_t touchPressed = touch.pressedLatch.exchange(0);
+    const uint16_t touchReleased = touch.releasedLatch.exchange(0);
+    static uint16_t sLastTouchOut = 0;
+    static uint16_t sLastTouchHeld = 0;
+    static uint16_t sDeferredTouch = 0;
+
     if (AllGameInputBlocked()) {
+        sLastTouchOut = 0;
+        sLastTouchHeld = 0;
+        sDeferredTouch = 0;
         return;
     }
 
@@ -73,18 +89,23 @@ void ControlDeck::WriteToOSContPad(OSContPad* pad) {
     }
 
     // Merge on-screen touch controls into port 1 (touch and a physical controller can both be
-    // active; OR semantics match how multiple mappings already combine).
-    auto& touch = Ship::TouchControllerState::Instance();
-    pad[0].button |= touch.buttons.load();
+    // active; OR semantics match how multiple mappings already combine). A tap that went down and
+    // up since the last read shows as pressed for this one read. A new press of a button the last
+    // read reported (released since then, or already up at that read because it was a latched tap)
+    // shows as released now and pressed on the next read, so it always gets its own rising edge.
+    const uint16_t touchBounce = (uint16_t)(sLastTouchOut & touchPressed & (touchReleased | (uint16_t)~sLastTouchHeld));
+    const uint16_t touchOut = (uint16_t)((touchHeld | touchPressed | sDeferredTouch) & ~touchBounce);
+    sDeferredTouch = touchBounce;
+    sLastTouchOut = touchOut;
+    sLastTouchHeld = touchHeld;
+    pad[0].button |= touchOut;
     if (pad[0].stick_x == 0 && pad[0].stick_y == 0) {
         pad[0].stick_x = touch.stickX.load();
         pad[0].stick_y = touch.stickY.load();
     }
-    const float camX = touch.cameraX.load();
-    const float camY = touch.cameraY.load();
-    if (camX != 0.0f || camY != 0.0f) {
-        pad[0].right_stick_x = (int8_t)(camX * 127.0f);
-        pad[0].right_stick_y = (int8_t)(camY * 127.0f);
+    if (touchCamX != 0.0f || touchCamY != 0.0f) {
+        pad[0].right_stick_x = (int8_t)(std::clamp(touchCamX, -1.0f, 1.0f) * 127.0f);
+        pad[0].right_stick_y = (int8_t)(std::clamp(touchCamY, -1.0f, 1.0f) * 127.0f);
     }
     // Gyro is a RATE, matching SDLGyroMapping::UpdatePad — assign it, never accumulate, or the
     // aim drifts away permanently. If the sensor stops delivering samples (disabled, or the app

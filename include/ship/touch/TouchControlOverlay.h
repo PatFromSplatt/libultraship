@@ -23,6 +23,7 @@ enum class TouchElementId {
     Ocarina,
     Eye,
     CameraZone, // implicit: any unclaimed touch area
+    UiWindow,   // implicit: a touch that landed on a non-game ImGui window (no button mask)
     DUp,
     DDown,
     DLeft,
@@ -70,6 +71,11 @@ class TouchControlOverlay {
     void UpdateStick(ImVec2 px);
     void ComposeButtons();
     void HandlePillRelease(TouchElementId id);
+    void ReleaseAllTouches();
+    bool TouchHitsUi(ImVec2 px);
+    bool IsOnGhostDot(ImVec2 px) const {
+        return px.x > mDisplaySize.x * 0.94f && px.y > mDisplaySize.y * 0.88f;
+    }
     void DrawElement(const TouchElement& el, bool pressed, ImDrawList* dl, float opacity);
 
     std::vector<TouchElement> mElements;
@@ -85,6 +91,7 @@ class TouchControlOverlay {
     // Menu drag-to-scroll. iOS never emits SDL_MOUSEWHEEL and ImGui has no touch scrolling, so
     // a tracked finger drag is the menu's only scroll input.
     bool HandleMenuScrollFinger(ImVec2 px, SDL_FingerID id, uint32_t type);
+    void ResetMenuScroll();
     SDL_FingerID mScrollFinger = -1;
     ImVec2 mScrollStart{};
     ImVec2 mScrollLast{};
@@ -93,10 +100,10 @@ class TouchControlOverlay {
     bool mScrollPastSlop = false;
     bool mScrollRejected = false;
     unsigned int mScrollWindowId = 0;
+    int mScrollDownFrame = 0; // ImGui frame count when the scroll finger went down
     ImVec2 mLastCameraPx{};
-    float mCamAccumX = 0.0f;
-    float mCamAccumY = 0.0f;
 
+    float mDpadBottom = 0.0f; // lower edge of the optional D-pad's hit band; 0 when not shown
     bool mOcarinaLayout = false;
     bool mHidden = false;
     bool mAutoHidden = false;                  // overlay hidden because a controller attached
