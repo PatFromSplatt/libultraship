@@ -4,11 +4,11 @@ name: ios
 # engine forward-port on its own — before any game is in the picture.
 on:
   push:
-    branches: [ios, ios-lus-c57da1b4]
+    branches: [ios, ios-lus-c57da1b4, ios-unified]
     paths-ignore:
       - '**.md'
   pull_request:
-    branches: [ios-lus-c57da1b4]
+    branches: [ios-lus-c57da1b4, ios-unified]
   workflow_dispatch:
 
 concurrency:
@@ -17,15 +17,25 @@ concurrency:
 
 jobs:
   build-ios:
-    runs-on: macos-15
+    runs-on: macos-26
+    env:
+      # Pin the toolchain: the image's default Xcode rotates every ~6 weeks. Xcode 26.6
+      # carries the iOS 26.5 SDK; deployment target stays 16.0, so nothing about install
+      # or device support changes — the app is simply built fully native for iOS 26.
+      # No iOS 27 SDK job: a 27-SDK build must adopt the UIScene lifecycle or it crashes at
+      # launch, and SDL2 2.32.10 has no scene support. 26.5-SDK builds run fine on iOS 27.
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
-      - name: Install build tools
-        run: brew install ninja
+      - name: Verify toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          test "$(xcrun --sdk iphoneos --show-sdk-version)" = "26.5"
       - name: Configure ccache
         uses: hendrikmuhs/ccache-action@v1.2.22
         with:
-          key: lus-ios
+          key: lus-ios-xcode26
           max-size: "1G"
           evict-old-files: job
       - name: Configure (iphoneos arm64, Metal-only)
