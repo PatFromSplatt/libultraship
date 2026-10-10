@@ -1,4 +1,3 @@
-#include <algorithm>
 #include "ship/window/gui/GuiWindow.h"
 #include "ship/Context.h"
 #include "ship/config/ConsoleVariable.h"

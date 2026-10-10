@@ -287,6 +287,11 @@ void Fast3dGui::ImGuiWMNewFrame() {
         case WindowBackend::FAST3D_SDL_OPENGL:
         case WindowBackend::FAST3D_SDL_METAL:
             ImGui_ImplSDL2_NewFrame();
+#if defined(__ANDROID__) || defined(__IOS__)
+            // The keyboard is held back while a press is down, and SDL may send no further event
+            // after the lift to re-evaluate on.
+            Ship::Mobile::ImGuiProcessEvent(ImGui::GetIO().WantTextInput);
+#endif
             break;
 #ifdef ENABLE_DX11
         case WindowBackend::FAST3D_DXGI_DX11:
@@ -842,6 +847,11 @@ void Fast3dGui::LoadGuiTexture(const std::string& name, const std::string& path,
                                const ImVec4& tint) {
     const auto res = static_cast<Fast::Texture*>(
         Ship::Context::GetRawInstance()->GetResourceManager()->LoadResource(path, true).get());
+
+    if (res == nullptr) {
+        SPDLOG_ERROR("LoadGuiTexture: could not load resource \"{}\" (name \"{}\")", path, name);
+        return;
+    }
 
     LoadGuiTexture(name, *res, palettePath, tint);
 }

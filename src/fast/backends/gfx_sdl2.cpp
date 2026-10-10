@@ -713,9 +713,16 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
                     break;
             }
             break;
-        case SDL_DROPFILE:
-            Ship::Context::GetRawInstance()->GetFileDropMgr()->SetDroppedFile(event.drop.file);
+        case SDL_DROPFILE: {
+            // Drops can arrive before the game has created the FileDropMgr. SDL hands ownership
+            // of the path to us; FileDropMgr keeps its own copy.
+            auto fileDropMgr = Ship::Context::GetRawInstance()->GetFileDropMgr();
+            if (fileDropMgr != nullptr) {
+                fileDropMgr->SetDroppedFile(event.drop.file);
+            }
+            SDL_free(event.drop.file);
             break;
+        }
         case SDL_QUIT:
             Close();
             break;

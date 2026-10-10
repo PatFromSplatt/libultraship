@@ -1,6 +1,7 @@
 #ifdef __IOS__
 #import <UIKit/UIKit.h>
 #import <CoreHaptics/CoreHaptics.h>
+#include <atomic>
 
 // Touch-play haptics, two layers:
 //  - Taps: UIImpactFeedbackGenerator micro-impacts when a finger lands on an overlay button,
@@ -15,6 +16,8 @@ static CHHapticEngine* sEngine = nil;
 static id<CHHapticPatternPlayer> sRumblePlayer = nil;
 static float sRumbleIntensity = -1.0f; // player must be rebuilt when this changes
 static bool sRumbleActive = false;
+// Set from the reset handler's queue; the player statics above belong to the game thread.
+static std::atomic<bool> sHapticsWasReset{ false };
 
 static bool EnsureEngine(void) {
     if (@available(iOS 13.0, *)) {
@@ -33,6 +36,7 @@ static bool EnsureEngine(void) {
             // reset handler plus the unconditional start below bring it back on demand.
             __weak CHHapticEngine* weakEngine = sEngine;
             sEngine.resetHandler = ^{
+                sHapticsWasReset.store(true);
                 [weakEngine startAndReturnError:nil];
             };
         }
@@ -40,6 +44,15 @@ static bool EnsureEngine(void) {
         return [sEngine startAndReturnError:nil];
     }
     return false;
+}
+
+// Players do not survive an engine reset; drop the stale one so the next start rebuilds it.
+static void DropRumblePlayerAfterReset(void) {
+    if (sHapticsWasReset.exchange(false)) {
+        sRumblePlayer = nil;
+        sRumbleActive = false;
+        sRumbleIntensity = -1.0f;
+    }
 }
 
 // 0 = light (buttons, pills), 1 = medium (stick spawn), 2 = rigid (ocarina notes).
@@ -76,6 +89,7 @@ extern "C" void IOSHapticsTap(int kind) {
 
 extern "C" void IOSHapticsRumbleStart(float intensity) {
     if (@available(iOS 13.0, *)) {
+        DropRumblePlayerAfterReset();
         if (intensity <= 0.0f || !EnsureEngine()) {
             return;
         }
@@ -96,6 +110,10 @@ extern "C" void IOSHapticsRumbleStart(float intensity) {
             if (err != nil || pattern == nil) {
                 return;
             }
+            if (sRumblePlayer != nil && sRumbleActive) {
+                [sRumblePlayer stopAtTime:CHHapticTimeImmediate error:nil];
+                sRumbleActive = false;
+            }
             sRumblePlayer = [sEngine createPlayerWithPattern:pattern error:&err];
             if (err != nil || sRumblePlayer == nil) {
                 sRumblePlayer = nil;
@@ -112,6 +130,7 @@ extern "C" void IOSHapticsRumbleStart(float intensity) {
 
 extern "C" void IOSHapticsRumbleStop(void) {
     if (@available(iOS 13.0, *)) {
+        DropRumblePlayerAfterReset();
         if (sRumblePlayer != nil && sRumbleActive) {
             [sRumblePlayer stopAtTime:CHHapticTimeImmediate error:nil];
         }

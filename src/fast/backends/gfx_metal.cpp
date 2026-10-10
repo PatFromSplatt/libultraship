@@ -33,6 +33,10 @@
 #include <SDL_timer.h>
 #include <SDL_events.h>
 #include "ship/port/mobile/MobileImpl.h"
+
+extern "C" void IOSHapticsRumbleStop(void);   // ship/touch/IOSHaptics.mm
+extern "C" void IOSBeginBackgroundTask(void); // ship/utils/IOSBackgroundTask.mm
+extern "C" void IOSEndBackgroundTask(void);
 #endif
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/fmt.h>
@@ -707,7 +711,17 @@ void GfxRenderingAPIMetal::SetupScreenFramebuffer(uint32_t width, uint32_t heigh
     // Never acquire drawables while backgrounded: iOS drops background presents, the
     // CAMetalLayer drawable pool starves, and every later nextDrawable() blocks for its full
     // 1s timeout — the game visually runs at ~1fps after resume.
+    // No game tick runs until resume, so on entering the park (between ticks, on the game thread,
+    // which is UIKit's main thread) this is the last chance to silence the phone rumble and the
+    // only chance to save. Checked inside the loop so a background entry that begins during a
+    // pump here (resumed and left again) gets its save too.
     while (Ship::Mobile::IsAppBackgrounded()) {
+        if (Ship::Mobile::ConsumeBackgroundParkEntry()) {
+            IOSHapticsRumbleStop();
+            IOSBeginBackgroundTask();
+            Ship::Mobile::RunBackgroundSaveHandler();
+            IOSEndBackgroundTask();
+        }
         SDL_PumpEvents();
         SDL_Delay(50);
     }
